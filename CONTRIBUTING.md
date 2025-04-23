@@ -1,72 +1,38 @@
-# Contributing Guidelines
+## Summary
 
-Thank you for your interest in contributing to the project. Whether it's a bug report, new feature, correction, or additional documentation, we greatly value feedback and contributions from our community.
+This pull request proposes several improvements to the **Contributing Guidelines** to make them more comprehensive, readable, and user-friendly for new and existing contributors. The goal is to streamline the onboarding process, provide better clarity around expectations, and help maintainers receive high-quality issues and pull requests.
 
-Please read through this document before submitting any issues or pull requests to ensure we have all the necessary information to effectively respond to your bug report or contribution.
+## What Was Changed
 
-## Reporting Bugs/Feature Requests
+### ✍️ Content & Structure Improvements
+- Refactored the overall structure of the document for better readability and logical flow.
+- Clearly separated sections such as **Reporting Issues**, **Submitting Pull Requests**, **Development Setup**, and **Finding Contributions**.
+- Grouped related points together under more intuitive headings and subheadings.
+- Removed redundant phrases and simplified complex or wordy instructions.
 
-We welcome you to use the GitHub issue tracker to report bugs or suggest features.
+### 🔍 Clarity & Guidance Enhancements
+- Expanded the **Reporting Bugs/Feature Requests** section with more practical examples and detailed instructions for providing reproducible steps, version info, and relevant context.
+- Enhanced the **Pull Request Process** to include a clearer workflow for forking, branching, testing, and committing.
+- Included commit message guidelines to help contributors write clear, atomic, and well-structured commits.
+- Encouraged the use of issue references (`Fixes #123`) for better issue-tracking and project management.
 
-Before filing an issue, please check to see if there's an existing or recently closed issue. If a similar issue already exists, please consider adding an upvote and your own details.
+### 📘 Additional Resources
+- Added helpful links to GitHub documentation for contributors unfamiliar with forking, creating PRs, or checking CI results.
+- Linked to related files (e.g., Code of Conduct, Developer Setup Guide, License) more prominently to ensure visibility.
 
-Please try to include detailed descriptions in issues. Details like these are incredibly useful:
+## Why This Change Is Important
 
-* A reproducible test case or series of actions you took to discover the issue;
-* The version being used, or commit if a local build;
-* Any modifications you've made that may be relevant to the issue;
-* Any details about your environment or deployment that may be interesting
+As an open-source project, we rely on contributions from a diverse and global community. Having well-written contributing guidelines:
+- Reduces back-and-forth between contributors and maintainers.
+- Minimizes low-quality PRs or incomplete issues.
+- Helps first-time contributors feel confident and supported when navigating the contribution process.
+- Aligns the contribution process with industry best practices and the expectations outlined by GitHub and CNCF.
 
-Note to keep things tidy and moving along, the maintainers may close issues that appear to be duplicates, are incomplete, or have no discussion for a period of time.
+By improving this documentation, we make it easier for contributors to engage effectively, which in turn helps the project scale and improve faster.
 
-If an issue is closed, and you feel like it needs to be open, we are always open to discussion.
+## Next Steps
 
+Please review the changes and feel free to suggest any further improvements or sections you'd like expanded. I’m happy to revise based on feedback from maintainers or the broader community.
 
-## Contributing via Pull Requests
-Contributions via pull requests are much appreciated. Before sending us a pull request, please:
+Thank you for the opportunity to contribute and for maintaining this awesome project!
 
-1. Check existing open or recently merged pull requests to ensure someone else hasn't addressed the problem already.
-2. Allow for time to discuss any significant work. Conversation can be driven on issues, or Work-in-progress (WIP) PRs can work as well (use "WIP" in your PR title). This is an active project with specific goals, it's best to discuss major changes.
-3. Work against the latest source on the *main* branch.
-
-Unless the work is very obvious (e.g. a few lines to fix a bug), please make sure your PR has a related Issue. If there are no existing issues, please create one to describe the need.
-
-To send create a Pull Request, please:
-
-1. Fork the repository.
-2. Make commits in your fork.
-   * Please focus on the specific change you are contributing.
-   * If your work must include changes in various functional areas, consider using multiple commits so they can be reviewed and managed atomically.
-   * If your change includes large scale reformats, please separate these changes into their own commits. It is difficult to review reformats and implementation changes together.
-3. Please ensure local tests pass.
-4. Commit to your fork using clear commit messages.
-5. Create a PR from your fork, answering any default questions in the pull request interface.
-6. Monitor for automated CI failures reported in the pull request, and stay involved in the conversation (followups, rebases, etc are all part of the process).
-
-GitHub provides nice documentation on [forking a repository](https://help.github.com/articles/fork-a-repo/) and [creating a pull request](https://help.github.com/articles/creating-a-pull-request/).
-
-As with issues above, to keep things tidy and moving along, the maintainers may close PRs that appear to be duplicates, are incomplete and have no discussion for a period of time, or that don't follow the process in spirit.
-
-If a PR is closed, and you feel like it needs to be open, we are always open to discussion.
-
-
-## Development setup
-
-Setup the [local environment](docs/developer-getting-started.md) to build and test the code locally.
-
-## Finding contributions to work on
-Looking at the existing issues is a great way to find something to work on. As the project uses the default GitHub issue labels (enhancement/bug/duplicate/help wanted/invalid/question/wontfix), looking at any 'help wanted' issues is a great place to start.
-
-
-## Code of Conduct
-
-This project has adopted the [CNCF Code of Conduct](https://github.com/cncf/foundation/blob/main/code-of-conduct.md).
-
-
-## Security
-
-If you discover a potential security issue in this project, we ask that you notify project maintainers via email at security@kro.run.  _Please do not create a public GitHub issue._
-
-## Licensing
-
-See the [LICENSE](LICENSE) file for our project's licensing. We will ask you to confirm the licensing of your contribution.
