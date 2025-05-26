@@ -1,15 +1,16 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors.
+// Copyright 2025 The Kube Resource Orchestrator Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License"). You may
-// not use this file except in compliance with the License. A copy of the
-// License is located at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//	http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// or in the "license" file accompanying this file. This file is distributed
-// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-// express or implied. See the License for the specific language governing
-// permissions and limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package graph
 
@@ -24,6 +25,7 @@ import (
 	"github.com/kro-run/kro/pkg/graph/variable"
 	"github.com/kro-run/kro/pkg/testutil/generator"
 	"github.com/kro-run/kro/pkg/testutil/k8s"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
 func TestGraphBuilder_Validation(t *testing.T) {
@@ -83,6 +85,20 @@ func TestGraphBuilder_Validation(t *testing.T) {
 			errMsg:  "naming convention violation",
 		},
 		{
+			name: "invalid KRO kind name",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"invalidKind", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+			},
+			wantErr: true,
+			errMsg:  "is not a valid KRO kind name",
+		},
+		{
 			name: "resource without a valid GVK",
 			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
 				generator.WithSchema(
@@ -137,6 +153,34 @@ func TestGraphBuilder_Validation(t *testing.T) {
 						"name": "test-vpc",
 					},
 				}, nil, []string{"invalid ! syntax"}),
+			},
+			wantErr: true,
+			errMsg:  "failed to parse includeWhen expressions",
+		},
+		{
+			name: "includeWhen expression reference a different resource",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+				}, nil, []string{"invalid ! syntax"}),
+				generator.WithResource("subnet", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "test-vpc",
+					},
+				}, nil, []string{"${vpc.status.state == 'available'}"}),
 			},
 			wantErr: true,
 			errMsg:  "failed to parse includeWhen expressions",
@@ -1183,6 +1227,89 @@ func TestGraphBuilder_ExpressionParsing(t *testing.T) {
 				})
 			},
 		},
+		{
+			name: "crds not failing when cel is present in other resources",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithResource("somecrd", map[string]interface{}{
+					"apiVersion": "apiextensions.k8s.io/v1",
+					"kind":       "CustomResourceDefinition",
+					"metadata": map[string]interface{}{
+						"name": "somecrd.ec2.services.k8s.aws",
+					},
+					"spec": map[string]interface{}{
+						"group":   "ec2.services.k8s.aws",
+						"version": "v1alpha1",
+						"names": map[string]interface{}{
+							"kind":     "SomeCRD",
+							"listKind": "SomeCRDList",
+							"singular": "SomeCRD",
+							"plural":   "SomeCRDs",
+						},
+						"scope": "Namespaced",
+					},
+				}, nil, nil),
+				generator.WithResource("vpc", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "VPC",
+					"metadata": map[string]interface{}{
+						"name": "vpc",
+					},
+					"spec": map[string]interface{}{
+						"cidrBlocks": []interface{}{"10.0.0.0/16"},
+					},
+				}, []string{
+					"${vpc.status.state == 'available'}",
+					"${vpc.status.vpcID != ''}",
+				}, nil),
+				generator.WithResource("subnet1", map[string]interface{}{
+					"apiVersion": "ec2.services.k8s.aws/v1alpha1",
+					"kind":       "Subnet",
+					"metadata": map[string]interface{}{
+						"name": "subnet1",
+					},
+					"spec": map[string]interface{}{
+						"vpcID":     "${vpc.metadata.name}",
+						"cidrBlock": "10.0.1.0/24",
+					},
+				}, nil, nil),
+			},
+			validateVars: func(t *testing.T, g *Graph) {
+				somecrd := g.Resources["somecrd"]
+				assert.Empty(t, somecrd.variables)
+				assert.Empty(t, somecrd.GetReadyWhenExpressions())
+				assert.Empty(t, somecrd.GetIncludeWhenExpressions())
+
+				// Verify resource with only readyWhen
+				vpc := g.Resources["vpc"]
+				assert.Empty(t, vpc.variables)
+				assert.Equal(t, []string{
+					"vpc.status.state == 'available'",
+					"vpc.status.vpcID != ''",
+				}, vpc.GetReadyWhenExpressions())
+				assert.Empty(t, vpc.GetIncludeWhenExpressions())
+
+				// Verify resource with mixed expressions
+				subnet := g.Resources["subnet1"]
+				assert.Len(t, subnet.variables, 1)
+				// Create expected variables to match against
+				validateVariables(t, subnet.variables, []expectedVar{
+					{
+						path:                 "spec.vpcID",
+						expressions:          []string{"vpc.metadata.name"},
+						kind:                 variable.ResourceVariableKindDynamic,
+						standaloneExpression: true,
+					},
+				})
+
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1225,4 +1352,52 @@ func TestNewBuilder(t *testing.T) {
 	builder, err := NewBuilder(&rest.Config{})
 	assert.Nil(t, err)
 	assert.NotNil(t, builder)
+}
+
+func Test_ValidateOpenAPISchema(t *testing.T) {
+	fakeResolver, fakeDiscovery := k8s.NewFakeResolver()
+	builder := &Builder{
+		schemaResolver:   fakeResolver,
+		discoveryClient:  fakeDiscovery,
+		resourceEmulator: emulator.NewEmulator(),
+	}
+
+	tests := []struct {
+		name                        string
+		resourceGraphDefinitionOpts []generator.ResourceGraphDefinitionOption
+		validateFunc                func(t *testing.T, schema *extv1.JSONSchemaProps)
+	}{
+		{
+			name: "check validation expression",
+			resourceGraphDefinitionOpts: []generator.ResourceGraphDefinitionOption{
+				generator.WithSchema(
+					"Test", "v1alpha1",
+					map[string]interface{}{
+						"name": "string",
+					},
+					nil,
+				),
+				generator.WithValidation("rule", "message"),
+			},
+			validateFunc: func(t *testing.T, schema *extv1.JSONSchemaProps) {
+				require.Contains(t, schema.Properties, "spec")
+				spec := schema.Properties["spec"]
+
+				require.Len(t, spec.XValidations, 1)
+				assert.Equal(t, "rule", spec.XValidations[0].Rule)
+				assert.Equal(t, "message", spec.XValidations[0].Message)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rgd := generator.NewResourceGraphDefinition("testrgd", tt.resourceGraphDefinitionOpts...)
+			g, err := builder.NewResourceGraphDefinition(rgd)
+			require.NoError(t, err)
+			require.Len(t, g.Instance.crd.Spec.Versions, 1)
+			require.NotNil(t, g.Instance.crd.Spec.Versions[0].Schema.OpenAPIV3Schema)
+			tt.validateFunc(t, g.Instance.crd.Spec.Versions[0].Schema.OpenAPIV3Schema)
+		})
+	}
 }

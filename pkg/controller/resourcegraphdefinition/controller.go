@@ -1,15 +1,16 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors.
+// Copyright 2025 The Kube Resource Orchestrator Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License"). You may
-// not use this file except in compliance with the License. A copy of the
-// License is located at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// or in the "license" file accompanying this file. This file is distributed
-// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-// express or implied. See the License for the specific language governing
-// permissions and limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package resourcegraphdefinition
 
@@ -17,10 +18,14 @@ import (
 	"context"
 
 	"github.com/go-logr/logr"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
+	ctrlrtcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -37,84 +42,132 @@ import (
 
 // ResourceGraphDefinitionReconciler reconciles a ResourceGraphDefinition object
 type ResourceGraphDefinitionReconciler struct {
-	log        logr.Logger
-	rootLogger logr.Logger
-
 	allowCRDDeletion bool
 
+	// Client and instanceLogger are set with SetupWithManager
+
 	client.Client
+	instanceLogger logr.Logger
+
 	clientSet  *kroclient.Set
 	crdManager kroclient.CRDClient
 
-	metadataLabeler   metadata.Labeler
-	rgBuilder         *graph.Builder
-	dynamicController *dynamiccontroller.DynamicController
+	metadataLabeler         metadata.Labeler
+	rgBuilder               *graph.Builder
+	dynamicController       *dynamiccontroller.DynamicController
+	maxConcurrentReconciles int
 }
 
 func NewResourceGraphDefinitionReconciler(
-	log logr.Logger,
-	mgrClient client.Client,
 	clientSet *kroclient.Set,
 	allowCRDDeletion bool,
 	dynamicController *dynamiccontroller.DynamicController,
 	builder *graph.Builder,
+	maxConcurrentReconciles int,
 ) *ResourceGraphDefinitionReconciler {
-	crdWrapper := clientSet.CRD(kroclient.CRDWrapperConfig{
-		Log: log,
-	})
-	rgLogger := log.WithName("controller.resourceGraphDefinition")
+	crdWrapper := clientSet.CRD(kroclient.CRDWrapperConfig{})
 
 	return &ResourceGraphDefinitionReconciler{
-		rootLogger:        log,
-		log:               rgLogger,
-		clientSet:         clientSet,
-		Client:            mgrClient,
-		allowCRDDeletion:  allowCRDDeletion,
-		crdManager:        crdWrapper,
-		dynamicController: dynamicController,
-		metadataLabeler:   metadata.NewKROMetaLabeler(),
-		rgBuilder:         builder,
+		clientSet:               clientSet,
+		allowCRDDeletion:        allowCRDDeletion,
+		crdManager:              crdWrapper,
+		dynamicController:       dynamicController,
+		metadataLabeler:         metadata.NewKROMetaLabeler(),
+		rgBuilder:               builder,
+		maxConcurrentReconciles: maxConcurrentReconciles,
 	}
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *ResourceGraphDefinitionReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.Client = mgr.GetClient()
+	r.instanceLogger = mgr.GetLogger()
+
+	logConstructor := func(req *reconcile.Request) logr.Logger {
+		log := mgr.GetLogger().WithName("rgd-controller").WithValues(
+			"controller", "ResourceGraphDefinition",
+			"controllerGroup", v1alpha1.GroupVersion.Group,
+			"controllerKind", "ResourceGraphDefinition",
+		)
+		if req != nil {
+			log = log.WithValues("name", req.Name)
+		}
+		return log
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
+		Named("ResourceGraphDefinition").
 		For(&v1alpha1.ResourceGraphDefinition{}).
 		WithEventFilter(predicate.GenerationChangedPredicate{}).
-		Complete(reconcile.AsReconciler[*v1alpha1.ResourceGraphDefinition](mgr.GetClient(), r))
+		WithOptions(
+			ctrlrtcontroller.Options{
+				LogConstructor:          logConstructor,
+				MaxConcurrentReconciles: r.maxConcurrentReconciles,
+			},
+		).
+		Watches(
+			&extv1.CustomResourceDefinition{},
+			handler.EnqueueRequestsFromMapFunc(r.findRGDsForCRD),
+			builder.WithPredicates(predicate.Funcs{
+				UpdateFunc: func(e event.UpdateEvent) bool {
+					return true
+				},
+				CreateFunc: func(e event.CreateEvent) bool {
+					return false
+				},
+				DeleteFunc: func(e event.DeleteEvent) bool {
+					return false
+				},
+			}),
+		).
+		Complete(reconcile.AsReconciler(mgr.GetClient(), r))
 }
 
-func (r *ResourceGraphDefinitionReconciler) Reconcile(ctx context.Context, resourcegraphdefinition *v1alpha1.ResourceGraphDefinition) (ctrl.Result, error) {
-	rlog := r.log.WithValues("resourcegraphdefinition", types.NamespacedName{Namespace: resourcegraphdefinition.Namespace, Name: resourcegraphdefinition.Name})
-	ctx = log.IntoContext(ctx, rlog)
+// findRGDsForCRD returns a list of reconcile requests for the ResourceGraphDefinition
+// that owns the given CRD. It is used to trigger reconciliation when a CRD is updated.
+func (r *ResourceGraphDefinitionReconciler) findRGDsForCRD(ctx context.Context, obj client.Object) []reconcile.Request {
+	crd, ok := obj.(*extv1.CustomResourceDefinition)
+	if !ok {
+		return nil
+	}
 
-	if !resourcegraphdefinition.DeletionTimestamp.IsZero() {
-		rlog.V(1).Info("ResourceGraphDefinition is being deleted")
-		if err := r.cleanupResourceGraphDefinition(ctx, resourcegraphdefinition); err != nil {
+	// Check if the CRD is owned by a ResourceGraphDefinition
+	if !metadata.IsKROOwned(crd.ObjectMeta) {
+		return nil
+	}
+
+	rgdName, ok := crd.Labels[metadata.ResourceGraphDefinitionNameLabel]
+	if !ok {
+		return nil
+	}
+
+	// Return a reconcile request for the corresponding RGD
+	return []reconcile.Request{
+		{
+			NamespacedName: types.NamespacedName{
+				Name: rgdName,
+			},
+		},
+	}
+}
+
+func (r *ResourceGraphDefinitionReconciler) Reconcile(ctx context.Context, o *v1alpha1.ResourceGraphDefinition) (ctrl.Result, error) {
+	if !o.DeletionTimestamp.IsZero() {
+		if err := r.cleanupResourceGraphDefinition(ctx, o); err != nil {
 			return ctrl.Result{}, err
 		}
-
-		rlog.V(1).Info("Setting resourcegraphdefinition as unmanaged")
-		if err := r.setUnmanaged(ctx, resourcegraphdefinition); err != nil {
+		if err := r.setUnmanaged(ctx, o); err != nil {
 			return ctrl.Result{}, err
 		}
-
 		return ctrl.Result{}, nil
 	}
 
-	rlog.V(1).Info("Setting resource graph definition as managed")
-	if err := r.setManaged(ctx, resourcegraphdefinition); err != nil {
+	if err := r.setManaged(ctx, o); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	rlog.V(1).Info("Syncing resourcegraphdefinition")
-	topologicalOrder, resourcesInformation, reconcileErr := r.reconcileResourceGraphDefinition(ctx, resourcegraphdefinition)
+	topologicalOrder, resourcesInformation, reconcileErr := r.reconcileResourceGraphDefinition(ctx, o)
 
-	rlog.V(1).Info("Setting resourcegraphdefinition status")
-	if err := r.setResourceGraphDefinitionStatus(ctx, resourcegraphdefinition, topologicalOrder, resourcesInformation, reconcileErr); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	return ctrl.Result{}, nil
+	return ctrl.Result{},
+		r.setResourceGraphDefinitionStatus(ctx, o, topologicalOrder, resourcesInformation, reconcileErr)
 }

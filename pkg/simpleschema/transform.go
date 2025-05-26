@@ -1,34 +1,46 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors.
+// Copyright 2025 The Kube Resource Orchestrator Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License"). You may
-// not use this file except in compliance with the License. A copy of the
-// License is located at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//	http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// or in the "license" file accompanying this file. This file is distributed
-// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-// express or implied. See the License for the specific language governing
-// permissions and limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package simpleschema
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
+	"strings"
 
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
+// A predefined type is a type that is predefined in the schema.
+// It is used to resolve references in the schema, while capturing the fact
+// whether the type has the required marker set (this information would
+// otherwise be lost in the parsing process).
+type predefinedType struct {
+	Schema   extv1.JSONSchemaProps
+	Required bool
+}
+
 // transformer is a transformer for OpenAPI schemas
 type transformer struct {
-	preDefinedTypes map[string]extv1.JSONSchemaProps
+	preDefinedTypes map[string]predefinedType
 }
 
 // newTransformer creates a new transformer
 func newTransformer() *transformer {
 	return &transformer{
-		preDefinedTypes: make(map[string]extv1.JSONSchemaProps),
+		preDefinedTypes: make(map[string]predefinedType),
 	}
 }
 
@@ -38,7 +50,7 @@ func newTransformer() *transformer {
 // As of today, kro doesn't support custom types in the schema - do
 // not use this function.
 func (t *transformer) loadPreDefinedTypes(obj map[string]interface{}) error {
-	t.preDefinedTypes = make(map[string]extv1.JSONSchemaProps)
+	t.preDefinedTypes = make(map[string]predefinedType)
 
 	jsonSchemaProps, err := t.buildOpenAPISchema(obj)
 	if err != nil {
@@ -46,7 +58,11 @@ func (t *transformer) loadPreDefinedTypes(obj map[string]interface{}) error {
 	}
 
 	for k, properties := range jsonSchemaProps.Properties {
-		t.preDefinedTypes[k] = properties
+		required := false
+		if slices.Contains(jsonSchemaProps.Required, k) {
+			required = true
+		}
+		t.preDefinedTypes[k] = predefinedType{Schema: properties, Required: required}
 	}
 	return nil
 }
@@ -113,10 +129,15 @@ func (tf *transformer) parseFieldSchema(key, fieldValue string, parentSchema *ex
 		if !ok {
 			return nil, fmt.Errorf("unknown type: %s", fieldType)
 		}
-		fieldJSONSchemaProps = &preDefinedType
+		fieldJSONSchemaProps = &preDefinedType.Schema
+		if preDefinedType.Required {
+			parentSchema.Required = append(parentSchema.Required, key)
+		}
 	}
 
-	tf.applyMarkers(fieldJSONSchemaProps, markers, key, parentSchema)
+	if err := tf.applyMarkers(fieldJSONSchemaProps, markers, key, parentSchema); err != nil {
+		return nil, fmt.Errorf("failed to apply markers: %w", err)
+	}
 
 	return fieldJSONSchemaProps, nil
 }
@@ -144,7 +165,7 @@ func (tf *transformer) handleMapType(key, fieldType string) (*extv1.JSONSchemaPr
 		}
 		fieldJSONSchemaProps.AdditionalProperties.Schema = valueSchema
 	} else if preDefinedType, ok := tf.preDefinedTypes[valueType]; ok {
-		fieldJSONSchemaProps.AdditionalProperties.Schema = &preDefinedType
+		fieldJSONSchemaProps.AdditionalProperties.Schema = &preDefinedType.Schema
 	} else if isAtomicType(valueType) {
 		fieldJSONSchemaProps.AdditionalProperties.Schema.Type = valueType
 	} else {
@@ -176,7 +197,7 @@ func (tf *transformer) handleSliceType(key, fieldType string) (*extv1.JSONSchema
 	} else if isAtomicType(elementType) {
 		fieldJSONSchemaProps.Items.Schema.Type = elementType
 	} else if preDefinedType, ok := tf.preDefinedTypes[elementType]; ok {
-		fieldJSONSchemaProps.Items.Schema = &preDefinedType
+		fieldJSONSchemaProps.Items.Schema = &preDefinedType.Schema
 	} else {
 		return nil, fmt.Errorf("unknown type: %s", elementType)
 	}
@@ -184,7 +205,7 @@ func (tf *transformer) handleSliceType(key, fieldType string) (*extv1.JSONSchema
 	return fieldJSONSchemaProps, nil
 }
 
-func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Marker, key string, parentSchema *extv1.JSONSchemaProps) {
+func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Marker, key string, parentSchema *extv1.JSONSchemaProps) error {
 	for _, marker := range markers {
 		switch marker.MarkerType {
 		case MarkerTypeRequired:
@@ -205,15 +226,58 @@ func (tf *transformer) applyMarkers(schema *extv1.JSONSchemaProps, markers []*Ma
 		case MarkerTypeDescription:
 			schema.Description = marker.Value
 		case MarkerTypeMinimum:
-			if val, err := strconv.ParseFloat(marker.Value, 64); err == nil {
-				schema.Minimum = &val
+			val, err := strconv.ParseFloat(marker.Value, 64)
+			if err != nil {
+				return fmt.Errorf("failed to parse minimum enum value: %w", err)
 			}
+			schema.Minimum = &val
 		case MarkerTypeMaximum:
-			if val, err := strconv.ParseFloat(marker.Value, 64); err == nil {
-				schema.Maximum = &val
+			val, err := strconv.ParseFloat(marker.Value, 64)
+			if err != nil {
+				return fmt.Errorf("failed to parse maximum enum value: %w", err)
+			}
+			schema.Maximum = &val
+		case MarkerTypeValidation:
+			if marker.Value == "" {
+				return fmt.Errorf("validation failed")
+			}
+			validation := []extv1.ValidationRule{
+				{
+					Rule:    marker.Value,
+					Message: "validation failed",
+				},
+			}
+			schema.XValidations = validation
+		case MarkerTypeEnum:
+			var enumJSONValues []extv1.JSON
+
+			enumValues := strings.Split(marker.Value, ",")
+			for _, val := range enumValues {
+				val = strings.TrimSpace(val)
+				if val == "" {
+					return fmt.Errorf("empty enum values are not allowed")
+				}
+
+				var rawValue []byte
+				switch schema.Type {
+				case "string":
+					rawValue = []byte(fmt.Sprintf("%q", val))
+				case "integer":
+					if _, err := strconv.ParseInt(val, 10, 64); err != nil {
+						return fmt.Errorf("failed to parse integer enum value: %w", err)
+					}
+					rawValue = []byte(val)
+				default:
+					return fmt.Errorf("enum values only supported for string and integer types, got type: %s", schema.Type)
+				}
+				enumJSONValues = append(enumJSONValues, extv1.JSON{Raw: rawValue})
+			}
+			if len(enumJSONValues) > 0 {
+				schema.Enum = enumJSONValues
 			}
 		}
 	}
+	return nil
 }
 
 // Other functions (LoadPreDefinedTypes, transformMap) remain unchanged

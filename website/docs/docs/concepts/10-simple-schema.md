@@ -33,7 +33,13 @@ spec:
       ports: "[]integer"
 
       # Map type
-      env: "map[string]string"
+      env: "map[string]mytype"
+
+    # Custom Types
+    types:
+      myType:
+        value1: string | required=true
+        value2: integer | default=42
 
     status:
       # Status fields with auto-inferred types
@@ -50,7 +56,7 @@ kro supports these foundational types:
 - `string`: Text values
 - `integer`: Whole numbers
 - `boolean`: True/False values
-- `number`: Decimal numbers
+- `float`: Decimal numbers
 
 For example:
 
@@ -58,7 +64,7 @@ For example:
 name: string
 age: integer
 enabled: boolean
-price: number
+price: float
 ```
 
 ### Structure Types
@@ -106,7 +112,24 @@ Examples:
 
 ```yaml
 labels: "map[string]string"
-metrics: "map[string]number"
+metrics: "map[string]float"
+```
+
+### Custom Types
+
+Custom types are specified in the separate `types` section.
+They provide a map of names to type specifications, that follow the simple schema.
+
+Example:
+
+```yaml
+schema:
+  types:
+    Person:
+      name: string
+      age: integer
+  spec:
+    people: '[]Person | required=true`
 ```
 
 ## Validation and Documentation
@@ -134,6 +157,9 @@ For example:
 
 ```yaml
 name: string | required=true default="app" description="Application name"
+replicas: integer | default=3 minimum=1 maximum=10
+price: float | minimum=0.01 maximum=999.99
+mode: string | enum="debug,info,warn,error" default="info"
 ```
 
 ## Status Fields

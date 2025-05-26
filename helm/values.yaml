@@ -11,7 +11,7 @@ image:
   # The location of the container image repository
   repository: ghcr.io/kro-run/kro/controller
   # Overrides the image tag whose default is the chart appVersion.
-  tag: "0.2.2"
+  tag: ${VERSION}
   # Ignores the repository and tag settings and uses the controllers ko entrypoint.
   ko: false
   # Image pull policy (IfNotPresent: pull the image only if it is not present locally)
@@ -110,8 +110,8 @@ config:
   resourceGraphDefinitionConcurrentReconciles: 1
   # The number of dynamic controller reconciles to run in parallel
   dynamicControllerConcurrentReconciles: 1
-  # The interval at which the controller will re list resources even with no changes, in hours
-  dynamicControllerDefaultResyncPeriod: 10
+  # The interval at which the controller will re list resources even with no changes, in seconds
+  dynamicControllerDefaultResyncPeriod: 36000
   # The maximum number of retries for an item in the queue will be retried before being dropped
   dynamicControllerDefaultQueueMaxRetries: 20
   # The maximum duration to wait for the controller to gracefully shutdown, in seconds

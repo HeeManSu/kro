@@ -1,15 +1,16 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors.
+// Copyright 2025 The Kube Resource Orchestrator Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License"). You may
-// not use this file except in compliance with the License. A copy of the
-// License is located at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// or in the "license" file accompanying this file. This file is distributed
-// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-// express or implied. See the License for the specific language governing
-// permissions and limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 // Package dynamiccontroller provides a flexible and efficient solution for
 // managing multiple GroupVersionResources (GVRs) in a Kubernetes environment.
@@ -38,7 +39,7 @@
 //
 // Why not use k8s.io/controller-runtime:
 //
-//  1. Staticc nature: controller-runtime is optimized for statically defined
+//  1. Static nature: controller-runtime is optimized for statically defined
 //     controllers, however kro requires runtime creation and management
 //     of controllers for various GVRs.
 //
@@ -64,6 +65,7 @@ import (
 	"github.com/go-logr/logr"
 	"golang.org/x/time/rate"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -90,12 +92,20 @@ type Config struct {
 	// will be retried before being dropped.
 	//
 	// NOTE(a-hilaly): I'm not very sure how useful is this, i'm trying to avoid
-	// situations where reconcile errors exauhst the queue.
+	// situations where reconcile errors exhaust the queue.
 	QueueMaxRetries int
 	// ShutdownTimeout is the maximum duration to wait for the controller to
 	// gracefully shutdown. We ideally want to avoid forceful shutdowns, giving
 	// the controller enough time to finish processing any pending items.
 	ShutdownTimeout time.Duration
+	// MinRetryDelay is the minimum delay before retrying an item in the queue
+	MinRetryDelay time.Duration
+	// MaxRetryDelay is the maximum delay before retrying an item in the queue
+	MaxRetryDelay time.Duration
+	// RateLimit is the maximum number of events processed per second
+	RateLimit int
+	// BurstLimit is the maximum number of events in a burst
+	BurstLimit int
 }
 
 // DynamicController (DC) is a single controller capable of managing multiple different
@@ -139,17 +149,15 @@ type informerWrapper struct {
 func NewDynamicController(
 	log logr.Logger,
 	config Config,
-	kubeClient dynamic.Interface,
-) *DynamicController {
+	kubeClient dynamic.Interface) *DynamicController {
 	logger := log.WithName("dynamic-controller")
 
 	dc := &DynamicController{
 		config:     config,
 		kubeClient: kubeClient,
-		// TODO(a-hilaly): Make the queue size configurable.
 		queue: workqueue.NewTypedRateLimitingQueueWithConfig(workqueue.NewTypedMaxOfRateLimiter(
-			workqueue.NewTypedItemExponentialFailureRateLimiter[ObjectIdentifiers](200*time.Millisecond, 1000*time.Second),
-			&workqueue.TypedBucketRateLimiter[ObjectIdentifiers]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
+			workqueue.NewTypedItemExponentialFailureRateLimiter[ObjectIdentifiers](config.MinRetryDelay, config.MaxRetryDelay),
+			&workqueue.TypedBucketRateLimiter[ObjectIdentifiers]{Limiter: rate.NewLimiter(rate.Limit(config.RateLimit), config.BurstLimit)},
 		), workqueue.TypedRateLimitingQueueConfig[ObjectIdentifiers]{Name: "dynamic-controller-queue"}),
 		log: logger,
 		// pass version and pod id from env
@@ -421,8 +429,16 @@ func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.Gro
 	_, exists := dc.informers.Load(gvr)
 	if exists {
 		// Even thought the informer is already registered, we should still
-		// still update the handler, as it might have changed.
+		// update the handler, as it might have changed.
 		dc.handlers.Store(gvr, handler)
+		// trigger reconciliation of the corresponding gvr's
+		objs, err := dc.kubeClient.Resource(gvr).Namespace("").List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to list objects for GVR %s: %w", gvr, err)
+		}
+		for _, obj := range objs.Items {
+			dc.enqueueObject(&obj, "update")
+		}
 		return nil
 	}
 
@@ -435,7 +451,6 @@ func (dc *DynamicController) StartServingGVK(ctx context.Context, gvr schema.Gro
 		"",
 		nil,
 	)
-
 	informer := gvkInformer.ForResource(gvr).Informer()
 
 	// Set up event handlers

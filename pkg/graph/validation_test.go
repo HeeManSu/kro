@@ -1,15 +1,16 @@
-// Copyright 2025 The Kube Resource Orchestrator Authors.
+// Copyright 2025 The Kube Resource Orchestrator Authors
 //
-// Licensed under the Apache License, Version 2.0 (the "License"). You may
-// not use this file except in compliance with the License. A copy of the
-// License is located at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//	http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// or in the "license" file accompanying this file. This file is distributed
-// on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-// express or implied. See the License for the specific language governing
-// permissions and limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package graph
 
@@ -246,6 +247,52 @@ func TestValidateKubernetesVersion(t *testing.T) {
 			}
 			if !tt.shouldPass && err == nil {
 				t.Errorf("Expected version %q to be invalid, but it passed validation", tt.version)
+			}
+		})
+	}
+}
+
+func TestValidateResourceGraphDefinitionNamingConventions(t *testing.T) {
+	tests := []struct {
+		name       string
+		resourceID string
+		kind       string
+		wantErr    bool
+	}{
+		{
+			name:       "Valid naming conventions",
+			resourceID: "validResourceID",
+			kind:       "ValidKindName",
+			wantErr:    false,
+		},
+		{
+			name:       "Invalid kind name",
+			resourceID: "validResourceID",
+			kind:       "invalidKindName",
+			wantErr:    true,
+		},
+		{
+			name:       "Invalid resource ID",
+			resourceID: "invalid_ResourceID",
+			kind:       "ValidKindName",
+			wantErr:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rgd := &v1alpha1.ResourceGraphDefinition{
+				Spec: v1alpha1.ResourceGraphDefinitionSpec{
+					Resources: []*v1alpha1.Resource{
+						{ID: tt.resourceID},
+					},
+					Schema: &v1alpha1.Schema{
+						Kind: tt.kind,
+					},
+				},
+			}
+			if err := validateResourceGraphDefinitionNamingConventions(rgd); (err != nil) != tt.wantErr {
+				t.Errorf("validateResourceGraphDefinitionNamingConventions() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
