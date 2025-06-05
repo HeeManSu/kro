@@ -1,0 +1,12 @@
+apiVersion: example.com/v1
+kind: WebApplication
+metadata:
+  name: my-web-app
+  namespace: default
+spec:
+  replicas: 3
+  image: nginx:1.21
+  port: 8080
+  ingress:
+    enabled: true
+    host: myapp.example.com

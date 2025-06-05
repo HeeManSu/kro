@@ -7,6 +7,9 @@
 *.dylib
 bin/*
 Dockerfile.cross
+node_modules
+out
+docs
 
 # Test binary, build with `go test -c`
 *.test
