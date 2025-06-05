@@ -1,0 +1,50 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: my-application
+  namespace: default
+spec:
+  schema:
+    spec:
+      name: string | required=true
+      replicas: integer | default=1
+      image: string | required=true
+      port: integer | default=8080
+  resources:
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: "{{ .spec.name }}"
+          namespace: "{{ .metadata.namespace }}"
+        spec:
+          replicas: "{{ .spec.replicas }}"
+          selector:
+            matchLabels:
+              app: "{{ .spec.name }}"
+          template:
+            metadata:
+              labels:
+                app: "{{ .spec.name }}"
+            spec:
+              containers:
+                - name: app
+                  image: "{{ .spec.image }}"
+                  ports:
+                    - containerPort: "{{ .spec.port }}"
+
+    - id: service
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: "{{ .spec.name }}-service"
+          namespace: "{{ .metadata.namespace }}"
+        spec:
+          selector:
+            app: "{{ .spec.name }}"
+          ports:
+            - port: 80
+              targetPort: "{{ .spec.port }}"
+          type: ClusterIP

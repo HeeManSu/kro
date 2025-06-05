@@ -1,0 +1,32 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: test-rgd
+  namespace: default
+spec:
+  # Missing required field - this should trigger validation error
+  schema:
+    # This should trigger validation since required 'resources' field is missing
+    version: v1
+  resources:
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: "{{ .metadata.name }}-deployment"
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: "{{ .metadata.name }}"
+          template:
+            metadata:
+              labels:
+                app: "{{ .metadata.name }}"
+            spec:
+              containers:
+                - name: app
+                  image: nginx
+                  ports:
+                    - containerPort: 80

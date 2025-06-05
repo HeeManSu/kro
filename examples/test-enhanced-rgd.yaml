@@ -1,0 +1,423 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: application-stack-enhanced
+  namespace: kro-system
+spec:
+  # Schema defines the custom API structure with enhanced validation
+  schema:
+    properties:
+      # Application configuration
+      app:
+        type: object
+        required: [name, image, port]
+        properties:
+          name:
+            type: string
+            pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+            minLength: 1
+            maxLength: 63
+            description: "Application name (DNS-1123 compliant)"
+          image:
+            type: string
+            pattern: "^[a-z0-9]+(\\.[a-z0-9]+)*(\\/[a-z0-9-_.]+)+:[a-zA-Z0-9-_.]+$"
+            description: "Container image with tag"
+          port:
+            type: integer
+            minimum: 1
+            maximum: 65535
+            description: "Application port"
+          replicas:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 1
+            description: "Number of replicas"
+          resources:
+            type: object
+            properties:
+              requests:
+                type: object
+                properties:
+                  cpu:
+                    type: string
+                    pattern: "^[0-9]+m?$"
+                  memory:
+                    type: string
+                    pattern: "^[0-9]+[KMGT]?i?$"
+              limits:
+                type: object
+                properties:
+                  cpu:
+                    type: string
+                    pattern: "^[0-9]+m?$"
+                  memory:
+                    type: string
+                    pattern: "^[0-9]+[KMGT]?i?$"
+        # CEL validation rules
+        x-kubernetes-validations:
+          - rule: "self.port > 0 && self.port < 65536"
+            message: "Port must be between 1 and 65535"
+          - rule: "self.replicas >= 1 && self.replicas <= 100"
+            message: "Replicas must be between 1 and 100"
+          - rule: "has(self.resources) ? (has(self.resources.requests) || has(self.resources.limits)) : true"
+            message: "Resources must have either requests or limits specified"
+
+      # Networking configuration
+      networking:
+        type: object
+        properties:
+          enabled:
+            type: boolean
+            default: true
+          type:
+            type: string
+            enum: ["ClusterIP", "NodePort", "LoadBalancer"]
+            default: "ClusterIP"
+          ingress:
+            type: object
+            properties:
+              enabled:
+                type: boolean
+                default: false
+              host:
+                type: string
+                pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$"
+              tls:
+                type: boolean
+                default: false
+              annotations:
+                type: object
+                additionalProperties:
+                  type: string
+        # CEL validation for networking
+        x-kubernetes-validations:
+          - rule: "!has(self.ingress) || !self.ingress.enabled || has(self.ingress.host)"
+            message: "Ingress host is required when ingress is enabled"
+          - rule: "!has(self.ingress) || !self.ingress.tls || has(self.ingress.host)"
+            message: "Ingress host is required when TLS is enabled"
+
+      # Storage configuration
+      storage:
+        type: object
+        properties:
+          enabled:
+            type: boolean
+            default: false
+          size:
+            type: string
+            pattern: "^[0-9]+[KMGT]?i?$"
+            description: "Storage size (e.g., 10Gi)"
+          storageClass:
+            type: string
+            description: "Storage class name"
+          accessModes:
+            type: array
+            items:
+              type: string
+              enum: ["ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany"]
+            default: ["ReadWriteOnce"]
+        # CEL validation for storage
+        x-kubernetes-validations:
+          - rule: "!self.enabled || has(self.size)"
+            message: "Storage size is required when storage is enabled"
+          - rule: "!self.enabled || size(self.accessModes) > 0"
+            message: "At least one access mode must be specified when storage is enabled"
+
+      # Environment and configuration
+      config:
+        type: object
+        properties:
+          env:
+            type: array
+            items:
+              type: object
+              required: [name, value]
+              properties:
+                name:
+                  type: string
+                  pattern: "^[A-Z_][A-Z0-9_]*$"
+                value:
+                  type: string
+          secrets:
+            type: array
+            items:
+              type: object
+              required: [name, key]
+              properties:
+                name:
+                  type: string
+                key:
+                  type: string
+          configMaps:
+            type: array
+            items:
+              type: object
+              required: [name, key]
+              properties:
+                name:
+                  type: string
+                key:
+                  type: string
+
+  # Resource graph definition with enhanced dependencies
+  graph:
+    # Deployment resource
+    - id: deployment
+      resource:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${app.name}
+          labels:
+            app: ${app.name}
+            managed-by: kro
+        spec:
+          replicas: ${app.replicas}
+          selector:
+            matchLabels:
+              app: ${app.name}
+          template:
+            metadata:
+              labels:
+                app: ${app.name}
+            spec:
+              containers:
+                - name: ${app.name}
+                  image: ${app.image}
+                  ports:
+                    - containerPort: ${app.port}
+                  # Conditional resources block
+                  resources: |
+                    ${if has(app.resources)}
+                    ${app.resources}
+                    ${end}
+                  # Environment variables from config
+                  env: |
+                    ${if has(config.env)}
+                    ${for env in config.env}
+                    - name: ${env.name}
+                      value: ${env.value}
+                    ${end}
+                    ${end}
+                  # Environment from secrets and configmaps
+                  envFrom: |
+                    ${if has(config.secrets)}
+                    ${for secret in config.secrets}
+                    - secretRef:
+                        name: ${secret.name}
+                        key: ${secret.key}
+                    ${end}
+                    ${end}
+                    ${if has(config.configMaps)}
+                    ${for cm in config.configMaps}
+                    - configMapRef:
+                        name: ${cm.name}
+                        key: ${cm.key}
+                    ${end}
+                    ${end}
+                  # Volume mounts for storage
+                  volumeMounts: |
+                    ${if storage.enabled}
+                    - name: storage
+                      mountPath: /data
+                    ${end}
+              # Volumes for storage
+              volumes: |
+                ${if storage.enabled}
+                - name: storage
+                  persistentVolumeClaim:
+                    claimName: ${app.name}-storage
+                ${end}
+
+    # Service resource
+    - id: service
+      resource:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${app.name}
+          labels:
+            app: ${app.name}
+            managed-by: kro
+        spec:
+          type: ${networking.type}
+          ports:
+            - port: 80
+              targetPort: ${app.port}
+              protocol: TCP
+          selector:
+            app: ${app.name}
+      dependencies:
+        - deployment
+
+    # Conditional Ingress resource
+    - id: ingress
+      condition: ${networking.ingress.enabled}
+      resource:
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: ${app.name}
+          labels:
+            app: ${app.name}
+            managed-by: kro
+          annotations: |
+            ${if has(networking.ingress.annotations)}
+            ${networking.ingress.annotations}
+            ${end}
+        spec:
+          tls: |
+            ${if networking.ingress.tls}
+            - hosts:
+              - ${networking.ingress.host}
+              secretName: ${app.name}-tls
+            ${end}
+          rules:
+            - host: ${networking.ingress.host}
+              http:
+                paths:
+                  - path: /
+                    pathType: Prefix
+                    backend:
+                      service:
+                        name: ${app.name}
+                        port:
+                          number: 80
+      dependencies:
+        - service
+
+    # Conditional PersistentVolumeClaim for storage
+    - id: pvc
+      condition: ${storage.enabled}
+      resource:
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: ${app.name}-storage
+          labels:
+            app: ${app.name}
+            managed-by: kro
+        spec:
+          accessModes: ${storage.accessModes}
+          resources:
+            requests:
+              storage: ${storage.size}
+          storageClassName: |
+            ${if has(storage.storageClass)}
+            ${storage.storageClass}
+            ${end}
+
+    # ServiceAccount for enhanced security
+    - id: serviceaccount
+      resource:
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: ${app.name}
+          labels:
+            app: ${app.name}
+            managed-by: kro
+
+    # NetworkPolicy for security
+    - id: networkpolicy
+      resource:
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: ${app.name}
+          labels:
+            app: ${app.name}
+            managed-by: kro
+        spec:
+          podSelector:
+            matchLabels:
+              app: ${app.name}
+          policyTypes:
+            - Ingress
+            - Egress
+          ingress:
+            - from:
+                - podSelector: {}
+              ports:
+                - protocol: TCP
+                  port: ${app.port}
+          egress:
+            - to: []
+              ports:
+                - protocol: TCP
+                  port: 53
+                - protocol: UDP
+                  port: 53
+            - to: []
+              ports:
+                - protocol: TCP
+                  port: 443
+      dependencies:
+        - deployment
+
+  # Global validation rules using CEL
+  validations:
+    - rule: "has(app.name) && size(app.name) > 0"
+      message: "Application name is required and cannot be empty"
+    - rule: "has(app.image) && size(app.image) > 0"
+      message: "Application image is required and cannot be empty"
+    - rule: "has(app.port) && app.port > 0 && app.port < 65536"
+      message: "Application port must be between 1 and 65535"
+    - rule: "!has(networking.ingress) || !networking.ingress.enabled || has(networking.ingress.host)"
+      message: "Ingress host is required when ingress is enabled"
+    - rule: "!has(storage) || !storage.enabled || has(storage.size)"
+      message: "Storage size is required when storage is enabled"
+    - rule: "has(app.replicas) ? app.replicas >= 1 && app.replicas <= 100 : true"
+      message: "Replicas must be between 1 and 100"
+
+---
+# Example instance of the enhanced application stack
+apiVersion: kro.run/v1alpha1
+kind: ApplicationStackEnhanced
+metadata:
+  name: my-web-app
+  namespace: default
+spec:
+  app:
+    name: my-web-app
+    image: nginx:1.21
+    port: 80
+    replicas: 3
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+  networking:
+    enabled: true
+    type: ClusterIP
+    ingress:
+      enabled: true
+      host: my-web-app.example.com
+      tls: true
+      annotations:
+        nginx.ingress.kubernetes.io/rewrite-target: /
+        cert-manager.io/cluster-issuer: letsencrypt-prod
+
+  storage:
+    enabled: true
+    size: 10Gi
+    storageClass: fast-ssd
+    accessModes: [ReadWriteOnce]
+
+  config:
+    env:
+      - name: ENV
+        value: production
+      - name: LOG_LEVEL
+        value: info
+    secrets:
+      - name: db-credentials
+        key: DATABASE_URL
+    configMaps:
+      - name: app-config
+        key: config.yaml
