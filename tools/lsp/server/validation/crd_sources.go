@@ -18,6 +18,10 @@ import (
 	"k8s.io/apimachinery/pkg/util/yaml"
 )
 
+// - **Local**: Filesystem paths (`./crds`, `~/.kube/crds`)
+// - **Cluster**: Kubernetes API (requires kubeconfig)
+// - **GitHub**: Public repositories with CRD files
+
 // LocalCRDSource loads CRDs from local filesystem
 type LocalCRDSource struct {
 	logger commonlog.Logger

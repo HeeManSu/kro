@@ -8,15 +8,19 @@ import (
 	protocol "github.com/tliron/glsp/protocol_3_16"
 
 	"github.com/kro-run/kro/tools/lsp/server/document"
+	"github.com/kro-run/kro/tools/lsp/server/parser"
 )
 
 // Manager coordinates all validation operations
+// - Orchestrates all validation processes
+// - Coordinates between different validators
+// - Publishes diagnostics to LSP client
 type Manager struct {
 	logger          commonlog.Logger
 	documentManager *document.Manager
 
 	// Main RGD validator
-	rgdValidator *RGDValidator
+	rgdValidator RGDValidatorInterface
 
 	// CRD Manager for schema validation
 	crdManager *CRDManager
@@ -32,26 +36,18 @@ type DiagnosticPublisher interface {
 	PublishDiagnostics(uri string, diagnostics []protocol.Diagnostic)
 }
 
-// NewManager creates a new validation manager
+// RGDValidatorInterface defines the interface for RGD validators
+type RGDValidatorInterface interface {
+	ValidateRGD(ctx context.Context, model *parser.DocumentModel, content string) []protocol.Diagnostic
+}
+
+// NewManager creates a new validation manager using enhanced Kro validation functions
 func NewManager(logger commonlog.Logger, docManager *document.Manager) *Manager {
 	return &Manager{
 		logger:          logger,
 		documentManager: docManager,
+		rgdValidator:    NewRGDValidator(logger), // Using comprehensive RGD validation
 	}
-}
-
-// NewManagerWithCRD creates a new validation manager with CRD support
-func NewManagerWithCRD(logger commonlog.Logger, docManager *document.Manager, crdManager *CRDManager) *Manager {
-	vm := &Manager{
-		logger:          logger,
-		documentManager: docManager,
-		crdManager:      crdManager,
-	}
-
-	// Initialize RGD validator with CRD support
-	vm.rgdValidator = NewRGDValidator(logger, crdManager)
-
-	return vm
 }
 
 // SetDiagnosticPublisher sets the diagnostic publisher for sending results to client

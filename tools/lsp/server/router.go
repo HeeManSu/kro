@@ -1,18 +1,20 @@
 package main
 
 import (
-	"context"
-
 	"github.com/kro-run/kro/tools/lsp/server/handlers"
 	"github.com/tliron/glsp"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
+// - Precise line/column positioning
+// - Error severity levels (Error, Warning, Info)
+// - VS Code integration with red underlines
 // Router handles routing of LSP requests to appropriate handlers
 // It acts as a central dispatch point for all LSP method calls
 type Router struct {
 	server          *KroServer
 	documentHandler *handlers.DocumentHandlerImpl
+	// hoverHandler    *handlers.HoverHandler
 }
 
 // NewRouter creates a new router instance
@@ -21,9 +23,13 @@ func NewRouter(server *KroServer) *Router {
 	documentHandler := handlers.NewDocumentHandler(server.logger, server.documentManager)
 	documentHandler.SetValidationManager(server.validationManager)
 
+	// Create hover handler
+	// hoverHandler := handlers.NewHoverHandler(server.logger, server.documentManager)
+
 	return &Router{
 		server:          server,
 		documentHandler: documentHandler,
+		// hoverHandler:    hoverHandler,
 	}
 }
 
@@ -57,9 +63,10 @@ func (r *Router) CreateHandler(server *KroServer) *protocol.Handler {
 		SetTrace: r.handleSetTrace,
 
 		// Language feature methods
+		// TextDocumentHover: r.hoverHandler.Hover,
+
 		// These will be added as we implement each feature
 		// TextDocumentCompletion:          r.completionHandler.Completion,
-		// TextDocumentHover:               r.hoverHandler.Hover,
 		// TextDocumentDefinition:          r.definitionHandler.Definition,
 		// TextDocumentCodeAction:          r.codeActionHandler.CodeAction,
 		// TextDocumentFormatting:          r.formattingHandler.Format,
@@ -80,25 +87,18 @@ func (r *Router) handleWorkspaceDidChangeWatchedFiles(glspContext *glsp.Context,
 	for _, change := range params.Changes {
 		r.server.logger.Debugf("File change: %s (type: %d)", change.URI, change.Type)
 
-		// If CRD files changed, refresh CRDs
-		if r.isCRDFile(change.URI) {
-			go func() {
-				ctx := context.Background()
-				if err := r.server.RefreshCRDs(ctx); err != nil {
-					r.server.logger.Errorf("Failed to refresh CRDs after file change: %v", err)
-				}
-			}()
-		}
+		// Handle file changes for RGD validation
+		// Future: Could trigger re-validation if needed
 	}
 
 	return nil
 }
 
-// isCRDFile checks if a file URI represents a CRD file
-func (r *Router) isCRDFile(uri string) bool {
-	// Simple check for CRD files based on path
-	return false // TODO: Implement proper CRD file detection
-}
+// isRGDFile checks if a file URI represents an RGD file
+// func (r *Router) isRGDFile(uri string) bool {
+// 	// Simple check for RGD files based on path or extension
+// 	return strings.HasSuffix(uri, ".yaml") || strings.HasSuffix(uri, ".yml")
+// }
 
 // handleSetTrace handles trace notifications
 func (r *Router) handleSetTrace(glspContext *glsp.Context, params *protocol.SetTraceParams) error {

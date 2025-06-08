@@ -14,6 +14,15 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+// - Loads CRDs from multiple sources (clusters, GitHub, local files)
+// - Caches parsed CRD schemas for performance
+// - Validates resources against OpenAPI schemas and CEL rules
+// - Supports background refresh and file watching
+// - CRD caching with GVK indexing
+// - Background refresh (configurable interval)
+// - Parallel CRD loading
+// - Incremental validation
+
 // CRDManager handles CRD schema loading, caching, and validation
 type CRDManager struct {
 	logger commonlog.Logger

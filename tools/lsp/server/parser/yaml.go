@@ -284,3 +284,9 @@ func ExtractCELExpression(value string) (string, bool) {
 
 	return value[start+2 : start+end], true
 }
+
+// ParseYAMLContent is a helper function to parse YAML content for testing
+func ParseYAMLContent(content string) (*DocumentModel, error) {
+	parser := NewYAMLParser()
+	return parser.Parse(content)
+}

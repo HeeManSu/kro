@@ -3,10 +3,13 @@ package document
 import (
 	"sync"
 
-	"github.com/tliron/commonlog"
-
 	"github.com/kro-run/kro/tools/lsp/server/parser"
+	"github.com/tliron/commonlog"
 )
+
+// - Manages document lifecycle (open, update, close)
+// - Parses YAML content and maintains document models
+// - Detects document types (RGD vs generic YAML)
 
 // Manager coordinates document lifecycle and parsed models
 type Manager struct {
