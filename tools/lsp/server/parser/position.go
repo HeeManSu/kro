@@ -91,7 +91,7 @@ func PositionToOffset(content string, pos Position) int {
 	}
 
 	offset := 0
-	for i := 0; i < pos.Line; i++ {
+	for i := range pos.Line {
 		offset += len(lines[i]) + 1 // +1 for newline
 	}
 
