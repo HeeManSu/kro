@@ -1,122 +1,126 @@
 package main
 
 import (
-	"context"
-
+	"github.com/kro-run/kro/tools/lsp/server/utils"
+	"github.com/kro-run/kro/tools/lsp/server/validation"
 	"github.com/tliron/commonlog"
 	"github.com/tliron/glsp"
 	protocol "github.com/tliron/glsp/protocol_3_16"
-
-	"github.com/kro-run/kro/tools/lsp/server/document"
-	"github.com/kro-run/kro/tools/lsp/server/validation"
 )
 
-// KroServer represents the core language server instance
-// It coordinates all components and manages server lifecycle
-type KroServer struct {
-	router *Router
-	logger commonlog.Logger
-
-	// Managers
-	documentManager   *document.Manager
-	validationManager *validation.Manager
+type kroServer struct {
+	logger            commonlog.Logger
+	router            *Router
+	validationManager *validation.ValidationManager
 }
 
-// NewKroServer creates a new Kro LSP server instance using simplified validation
-func NewKroServer(logger commonlog.Logger) *KroServer {
-	// Initialize document manager
-	documentManager := document.NewManager(logger)
-
-	// Initialize validation manager using Kro validation functions directly
-	validationManager := validation.NewManager(logger, documentManager)
-
-	server := &KroServer{
-		logger:            logger,
-		documentManager:   documentManager,
-		validationManager: validationManager,
+func NewKroServer(logger commonlog.Logger) *kroServer {
+	server := &kroServer{
+		logger: logger,
 	}
 
-	// Create router
 	server.router = NewRouter(server)
-
 	return server
 }
 
-// Initialize handles the LSP initialize request
-func (s *KroServer) Initialize(context *glsp.Context, params *protocol.InitializeParams) (any, error) {
-	s.logger.Info("Initializing Kro Language Server using Kro validation functions")
+func (s *kroServer) Initialize(context *glsp.Context, params *protocol.InitializeParams) (any, error) {
+	s.logger.Infof("Initializing Kro Language Server")
 
-	// Define server capabilities
+	// For development purposes: Examples and settings.json are in different directories
+	// Initialize validation manager with workspace root
+	if params.RootURI != nil {
+		workspaceRoot := *params.RootURI
+		s.logger.Debugf("Received RootURI: %s", workspaceRoot)
+		if workspaceRoot != "" {
+			// Remove file:// prefix if present
+			if len(workspaceRoot) > 7 && workspaceRoot[:7] == "file://" {
+				workspaceRoot = workspaceRoot[7:]
+				s.logger.Debugf("After removing file:// prefix: %s", workspaceRoot)
+			}
+
+			s.logger.Infof("Initializing validation manager with workspace: %s", workspaceRoot)
+			// Initialize validation manager with workspace root
+			s.validationManager = validation.NewValidationManager(s.logger, workspaceRoot)
+			s.logger.Info("Validation manager initialized successfully")
+		} else {
+			s.logger.Warningf("RootURI is empty string")
+		}
+	} else {
+		s.logger.Warningf("RootURI is nil")
+	}
+
+	// Fallback: initialize without workspace if no root URI
+	if s.validationManager == nil {
+		s.logger.Warningf("No workspace root provided, initializing with current directory")
+		s.validationManager = validation.NewValidationManager(s.logger, ".")
+	}
+
+	// Update document handlers with the real ValidationManager
+	s.router.UpdateValidationManager(s.validationManager)
+
 	capabilities := s.createServerCapabilities()
+
+	s.logger.Infof("Sending server capabilities: TextDocumentSync=%+v", capabilities.TextDocumentSync)
 
 	return protocol.InitializeResult{
 		Capabilities: capabilities,
-		ServerInfo:   nil,
+		ServerInfo: &protocol.InitializeResultServerInfo{
+			Name:    "Kro Language Server",
+			Version: utils.StringPtr("0.0.1"),
+		},
 	}, nil
 }
 
-// Initialized handles the initialized notification
-func (s *KroServer) Initialized(context *glsp.Context, params *protocol.InitializedParams) error {
-	s.logger.Info("Server initialized with Kro validation")
+func (s *kroServer) Initialized(context *glsp.Context, params *protocol.InitializedParams) error {
+	s.logger.Infof("Server initialized successfully")
+
+	// Log CRD information
+	// crdInfo := s.validationManager.GetCRDInfo()
+	// s.logger.Infof("CRD validation status: %+v", crdInfo)
+
 	return nil
 }
 
-// Shutdown handles the shutdown request
-func (s *KroServer) Shutdown(context *glsp.Context) error {
+func (s *kroServer) Shutdown(context *glsp.Context) error {
 	s.logger.Info("Shutting down server")
 	return nil
 }
 
-// createServerCapabilities defines what features this LSP server supports
-func (s *KroServer) createServerCapabilities() protocol.ServerCapabilities {
-	syncKind := protocol.TextDocumentSyncKindIncremental
+// SetTrace handles trace setting notifications
+func (s *kroServer) SetTrace(context *glsp.Context, params *protocol.SetTraceParams) error {
+	s.logger.Debugf("Trace set to: %s", params.Value)
+	return nil
+}
+
+// WorkspaceDidChangeWatchedFiles handles file system change notifications
+func (s *kroServer) WorkspaceDidChangeWatchedFiles(context *glsp.Context, params *protocol.DidChangeWatchedFilesParams) error {
+	s.logger.Debugf("Workspace files changed: %d changes", len(params.Changes))
+	return nil
+}
+
+func (s *kroServer) createServerCapabilities() protocol.ServerCapabilities {
+
+	syncKind := protocol.TextDocumentSyncKindFull
 	capabilities := protocol.ServerCapabilities{
-		// Document synchronization
 		TextDocumentSync: protocol.TextDocumentSyncOptions{
-			OpenClose: boolPtr(true),
+			OpenClose: utils.BoolPtr(true),
 			Change:    &syncKind,
 			Save: &protocol.SaveOptions{
-				IncludeText: boolPtr(true),
+				IncludeText: utils.BoolPtr(true),
 			},
 		},
 
 		// Language features (basic capabilities)
-		// HoverProvider: boolPtr(true),
+		// HoverProvider: utils.BoolPtr(true),
 		// CompletionProvider: &protocol.CompletionOptions{
 		// 	TriggerCharacters: []string{".", ":", "-", " "},
 		// },
 
 		// Advanced features (will be implemented later)
-		// DefinitionProvider: boolPtr(true),
-		// CodeActionProvider: boolPtr(true),
-		// DocumentFormattingProvider: boolPtr(true),
+		// DefinitionProvider: utils.BoolPtr(true),
+		// CodeActionProvider: utils.BoolPtr(true),
+		// DocumentFormattingProvider: utils.BoolPtr(true),
 	}
 
 	return capabilities
-}
-
-// GetValidationManager returns the validation manager
-func (s *KroServer) GetValidationManager() ValidationManagerInterface {
-	return s.validationManager
-}
-
-// ValidationManagerInterface defines the interface for validation managers
-type ValidationManagerInterface interface {
-	ValidateDocument(ctx context.Context, uri string) error
-	ClearDiagnostics(uri string)
-	SetDiagnosticPublisher(publisher validation.DiagnosticPublisher)
-}
-
-// GetValidationInfo returns information about validation system
-func (s *KroServer) GetValidationInfo() map[string]interface{} {
-	return map[string]interface{}{
-		"enabled": true,
-		"type":    "kro-validation",
-		"message": "Using Kro validation functions",
-	}
-}
-
-// Helper function to create bool pointers
-func boolPtr(b bool) *bool {
-	return &b
 }

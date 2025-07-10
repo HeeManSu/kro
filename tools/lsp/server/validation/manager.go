@@ -2,148 +2,193 @@ package validation
 
 import (
 	"context"
-	"sync"
+	"encoding/json"
+	"os"
+	"path/filepath"
 
-	"github.com/tliron/commonlog"
-	protocol "github.com/tliron/glsp/protocol_3_16"
-
-	"github.com/kro-run/kro/tools/lsp/server/document"
 	"github.com/kro-run/kro/tools/lsp/server/parser"
+	"github.com/tliron/commonlog"
 )
 
-// Manager coordinates all validation operations
-// - Orchestrates all validation processes
-// - Coordinates between different validators
-// - Publishes diagnostics to LSP client
-type Manager struct {
-	logger          commonlog.Logger
-	documentManager *document.Manager
-
-	// Main RGD validator
-	rgdValidator RGDValidatorInterface
-
-	// CRD Manager for schema validation
-	crdManager *CRDManager
-
-	// Diagnostic publishing
-	diagnosticPublisher DiagnosticPublisher
-
-	mu sync.RWMutex
+type ValidationManager struct {
+	logger        commonlog.Logger
+	rgdValidator  *RGDValidator
+	crdManager    *CRDManager
+	workspaceRoot string
 }
 
-// DiagnosticPublisher interface for publishing diagnostics to the client
-type DiagnosticPublisher interface {
-	PublishDiagnostics(uri string, diagnostics []protocol.Diagnostic)
+type ValidationResult struct {
+	Errors []ValidationError
+	Source string
 }
 
-// RGDValidatorInterface defines the interface for RGD validators
-type RGDValidatorInterface interface {
-	ValidateRGD(ctx context.Context, model *parser.DocumentModel, content string) []protocol.Diagnostic
+type ValidationError struct {
+	Message  string
+	Range    parser.Range
+	Severity string
+	Source   string
 }
 
-// NewManager creates a new validation manager using enhanced Kro validation functions
-func NewManager(logger commonlog.Logger, docManager *document.Manager) *Manager {
-	return &Manager{
-		logger:          logger,
-		documentManager: docManager,
-		rgdValidator:    NewRGDValidator(logger), // Using comprehensive RGD validation
-	}
-}
-
-// SetDiagnosticPublisher sets the diagnostic publisher for sending results to client
-func (vm *Manager) SetDiagnosticPublisher(publisher DiagnosticPublisher) {
-	vm.mu.Lock()
-	defer vm.mu.Unlock()
-	vm.diagnosticPublisher = publisher
-}
-
-// ValidateDocument performs comprehensive validation on a document
-func (vm *Manager) ValidateDocument(ctx context.Context, uri string) error {
-	vm.logger.Debugf("Validating document: %s", uri)
-
-	var allDiagnostics []protocol.Diagnostic
-
-	// Get document and model
-	doc, exists := vm.documentManager.GetDocument(uri)
-	if !exists {
-		vm.logger.Warningf("Document not found for validation: %s", uri)
-		return nil
+func NewValidationManager(logger commonlog.Logger, workspaceRoot string) *ValidationManager {
+	vm := &ValidationManager{
+		logger:        logger,
+		workspaceRoot: workspaceRoot,
 	}
 
-	model, exists := vm.documentManager.GetDocumentModel(uri)
-	if !exists || model == nil {
-		// Document parsing failed, create a syntax error diagnostic
-		errorLevel := protocol.DiagnosticSeverityError
-		syntaxDiag := protocol.Diagnostic{
-			Range: protocol.Range{
-				Start: protocol.Position{Line: 0, Character: 0},
-				End:   protocol.Position{Line: 0, Character: 10},
+	// Initialize validators
+	vm.rgdValidator = NewRGDValidator(logger)
+
+	// Initialize CRD manager with default GitHub config
+	crdConfig := CRDConfig{
+		Enabled:     true,
+		AutoRefresh: true,
+		GitHubRepos: []GitHubConfig{
+			{
+				Owner:  "kubernetes",
+				Repo:   "kubernetes",
+				Path:   "api/openapi-spec/v3",
+				Branch: "master",
+				Token:  "",
 			},
-			Severity: &errorLevel,
-			Message:  "Failed to parse YAML document",
-		}
-		allDiagnostics = append(allDiagnostics, syntaxDiag)
-		vm.publishDiagnostics(uri, allDiagnostics)
-		return nil
+		},
+	}
+	vm.crdManager = NewCRDManager(logger, crdConfig)
+
+	// Connect CRD manager to RGD validator
+	vm.rgdValidator.SetCRDManager(vm.crdManager)
+
+	// Load settings from VS Code
+	vm.loadSettings()
+
+	return vm
+}
+
+// loads validation settings from VS Code settings.json
+func (vm *ValidationManager) loadSettings() {
+	if vm.workspaceRoot == "TEMP_WORKSPACE_ROOT" {
+		return
 	}
 
-	// Determine document type and apply specific validation
-	docType := vm.documentManager.GetDocumentType(uri)
+	var settingsPaths []string
+	var data []byte
+	var err error
+	var foundPath string
 
-	switch docType {
-	case document.DocumentTypeRGD:
-		vm.logger.Debugf("Validating RGD document: %s", uri)
+	// Note: Only for development purposes. Will be fixed in the future.
+	// Start from workspace root and traverse up
+	currentDir := vm.workspaceRoot
 
-		// Use RGD validator if available
-		if vm.rgdValidator != nil {
-			rgdDiagnostics := vm.rgdValidator.ValidateRGD(ctx, model, doc.Content)
-			allDiagnostics = append(allDiagnostics, rgdDiagnostics...)
+	for i := 0; i < 5; i++ {
+		vm.logger.Debugf("Checking directory level %d: %s", i, currentDir)
+
+		kroClientPath := filepath.Join(currentDir, "tools", "lsp", "client", ".vscode", "settings.json")
+		settingsPaths = append(settingsPaths, kroClientPath)
+
+		kroRootPath := filepath.Join(currentDir, ".vscode", "settings.json")
+		settingsPaths = append(settingsPaths, kroRootPath)
+
+		// Look for kro subdirectory (common case when workspace is kro-example but kro repo is nearby)
+		kroSubdirClientPath := filepath.Join(currentDir, "kro", "tools", "lsp", "client", ".vscode", "settings.json")
+		settingsPaths = append(settingsPaths, kroSubdirClientPath)
+
+		kroSubdirRootPath := filepath.Join(currentDir, "kro", ".vscode", "settings.json")
+		settingsPaths = append(settingsPaths, kroSubdirRootPath)
+
+		// Go up one directory
+		parentDir := filepath.Dir(currentDir)
+		if parentDir == currentDir {
+			vm.logger.Debugf("Reached filesystem root, stopping traversal")
+			break
+		}
+		currentDir = parentDir
+	}
+
+	// Try each path until we find one that works
+	for _, path := range settingsPaths {
+		vm.logger.Debugf("Trying settings path: %s", path)
+		data, err = os.ReadFile(path)
+		if err == nil {
+			foundPath = path
+			vm.logger.Infof("Loaded settings from: %s", foundPath)
+			break
 		} else {
-			vm.logger.Warningf("No RGD validator available for %s", uri)
-		}
-
-	case document.DocumentTypeYAML:
-		// Generic YAML - no specific validation
-		vm.logger.Debugf("Document %s is generic YAML, no specific validation", uri)
-
-	default:
-		vm.logger.Debugf("Unknown document type for %s", uri)
-	}
-
-	// Publish all diagnostics
-	vm.publishDiagnostics(uri, allDiagnostics)
-
-	vm.logger.Debugf("Validation completed for %s with %d diagnostics", uri, len(allDiagnostics))
-	return nil
-}
-
-// ValidateAllDocuments validates all open documents
-func (vm *Manager) ValidateAllDocuments(ctx context.Context) error {
-	uris := vm.documentManager.GetAllDocuments()
-
-	for _, uri := range uris {
-		if err := vm.ValidateDocument(ctx, uri); err != nil {
-			vm.logger.Errorf("Error validating document %s: %v", uri, err)
+			vm.logger.Debugf("Not found: %v", err)
 		}
 	}
 
-	return nil
-}
+	if err != nil {
+		vm.logger.Debugf("No VS Code settings found in any location, using defaults")
+		vm.logger.Debugf("Tried paths: %v", settingsPaths)
+		return
+	}
 
-// ClearDiagnostics clears all diagnostics for a document
-func (vm *Manager) ClearDiagnostics(uri string) {
-	vm.publishDiagnostics(uri, []protocol.Diagnostic{})
-}
+	var settings map[string]interface{}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		vm.logger.Warningf("Failed to parse VS Code settings: %v", err)
+		return
+	}
 
-// publishDiagnostics publishes diagnostics to the client
-func (vm *Manager) publishDiagnostics(uri string, diagnostics []protocol.Diagnostic) {
-	vm.mu.RLock()
-	publisher := vm.diagnosticPublisher
-	vm.mu.RUnlock()
+	if crdSettings, exists := settings["kro.crd"]; exists {
+		var crdConfig CRDConfig
+		if configBytes, err := json.Marshal(crdSettings); err == nil {
+			if err := json.Unmarshal(configBytes, &crdConfig); err != nil {
+				vm.logger.Warningf("Failed to parse CRD config: %v", err)
+			} else {
+				vm.updateCRDManagerSources(crdConfig)
+			}
+		}
+	}
 
-	if publisher != nil {
-		publisher.PublishDiagnostics(uri, diagnostics)
+	vm.logger.Infof("Loaded validation settings from VS Code")
+
+	// Load CRDs
+	vm.logger.Infof("CRD Manager enabled: %v", vm.crdManager.IsEnabled())
+	if vm.crdManager.IsEnabled() {
+		ctx := context.Background()
+		if err := vm.crdManager.LoadCRDs(ctx); err != nil {
+			vm.logger.Warningf("Failed to load CRDs: %v", err)
+		} else {
+			vm.logger.Infof("CRD loading completed successfully")
+		}
 	} else {
-		vm.logger.Warningf("No diagnostic publisher set, cannot publish %d diagnostics for %s", len(diagnostics), uri)
+		vm.logger.Warningf("CRD validation is disabled")
 	}
 }
+
+// updates the sources of the existing CRD manager
+func (vm *ValidationManager) updateCRDManagerSources(config CRDConfig) {
+	vm.crdManager.updateConfig(config)
+}
+
+func (vm *ValidationManager) ValidateDocument(ctx context.Context, uri string, parsed *parser.ParsedYAML) *ValidationResult {
+	result := &ValidationResult{
+		Source: uri,
+	}
+
+	// structural and syntax validation
+	rgdErrors := vm.rgdValidator.ValidateRGD(parsed)
+	result.Errors = append(result.Errors, rgdErrors...)
+	return result
+}
+
+// returns basic information about CRD validation status
+// func (vm *ValidationManager) GetCRDInfo() map[string]interface{} {
+// 	if vm.crdManager == nil {
+// 		return map[string]interface{}{
+// 			"enabled": false,
+// 			"reason":  "CRD manager not initialized",
+// 		}
+// 	}
+
+// 	if !vm.crdManager.IsEnabled() {
+// 		return map[string]interface{}{
+// 			"enabled": false,
+// 			"reason":  "CRD validation disabled",
+// 		}
+// 	}
+
+// 	return map[string]interface{}{
+// 		"enabled": true,
+// 		"status":  "CRD validation active",
+// 	}
+// }

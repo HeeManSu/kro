@@ -1,136 +1,96 @@
 package parser
 
-import (
-	"strings"
+import "fmt"
 
-	protocol "github.com/tliron/glsp/protocol_3_16"
-)
-
-// Position represents a position in a text document
+// Position represents a position in the document
 type Position struct {
-	Line      int
-	Character int
+	Line   int // 1-based line number
+	Column int // 0-based column number
 }
 
-// Range represents a range in a text document
+// Range represents a range in the document
 type Range struct {
-	Start Position
-	End   Position
+	Start Position // Start position (inclusive)
+	End   Position // End position (exclusive)
 }
 
-// ToProtocolPosition converts our Position to LSP protocol Position
-func (p Position) ToProtocolPosition() protocol.Position {
-	return protocol.Position{
-		Line:      uint32(p.Line),
-		Character: uint32(p.Character),
-	}
+// string representation of the position
+func (p Position) String() string {
+	return fmt.Sprintf("Line %d, Column %d", p.Line, p.Column)
 }
 
-// ToProtocolRange converts our Range to LSP protocol Range
-func (r Range) ToProtocolRange() protocol.Range {
-	return protocol.Range{
-		Start: r.Start.ToProtocolPosition(),
-		End:   r.End.ToProtocolPosition(),
-	}
+// string representation of the range
+func (r Range) String() string {
+	return fmt.Sprintf("Start: %s, End: %s", r.Start.String(), r.End.String())
 }
 
-// PositionFromProtocol converts from LSP protocol Position to our Position
-func PositionFromProtocol(p protocol.Position) Position {
-	return Position{
-		Line:      int(p.Line),
-		Character: int(p.Character),
-	}
-}
+// checks if a position is within this range
+func (r Range) Contains(pos Position) bool {
 
-// RangeFromProtocol converts from LSP protocol Range to our Range
-func RangeFromProtocol(r protocol.Range) Range {
-	return Range{
-		Start: PositionFromProtocol(r.Start),
-		End:   PositionFromProtocol(r.End),
-	}
-}
-
-// OffsetToPosition converts a byte offset to a Position in the document
-func OffsetToPosition(content string, offset int) Position {
-	if offset < 0 {
-		return Position{Line: 0, Character: 0}
-	}
-
-	lines := strings.Split(content, "\n")
-	currentOffset := 0
-
-	for lineNum, line := range lines {
-		lineLength := len(line) + 1 // +1 for newline
-
-		if currentOffset+lineLength > offset {
-			// The offset is within this line
-			charOffset := offset - currentOffset
-			return Position{
-				Line:      lineNum,
-				Character: charOffset,
-			}
-		}
-
-		currentOffset += lineLength
-	}
-
-	// If we get here, offset is beyond the end of the document
-	lastLine := max(len(lines)-1, 0)
-	return Position{
-		Line:      lastLine,
-		Character: len(lines[lastLine]),
-	}
-}
-
-// PositionToOffset converts a Position to a byte offset in the document
-func PositionToOffset(content string, pos Position) int {
-	lines := strings.Split(content, "\n")
-
-	if pos.Line >= len(lines) {
-		return len(content)
-	}
-
-	offset := 0
-	for i := range pos.Line {
-		offset += len(lines[i]) + 1 // +1 for newline
-	}
-
-	// Add the character offset within the line
-	if pos.Character > len(lines[pos.Line]) {
-		offset += len(lines[pos.Line])
-	} else {
-		offset += pos.Character
-	}
-
-	return offset
-}
-
-// IsPositionInRange checks if a position is within a range
-func IsPositionInRange(pos Position, r Range) bool {
-	// Check if position is after start
-	if pos.Line < r.Start.Line || (pos.Line == r.Start.Line && pos.Character < r.Start.Character) {
+	if pos.Line < r.Start.Line || pos.Line > r.End.Line {
 		return false
 	}
 
-	// Check if position is before end
-	if pos.Line > r.End.Line || (pos.Line == r.End.Line && pos.Character > r.End.Character) {
+	if pos.Line == r.Start.Line && pos.Column < r.Start.Column {
+		return false
+	}
+
+	if pos.Line == r.End.Line && pos.Column > r.End.Column {
 		return false
 	}
 
 	return true
+
 }
 
-// ExtendRange extends a range to include another range
-func ExtendRange(r1, r2 Range) Range {
-	start := r1.Start
-	if r2.Start.Line < r1.Start.Line || (r2.Start.Line == r1.Start.Line && r2.Start.Character < r1.Start.Character) {
-		start = r2.Start
+// checks if the position is valid (positive line and column)
+func (p Position) IsValid() bool {
+	return p.Line > 0 && p.Column >= 0
+}
+
+// checks if the range is valid (start and end positions are valid)
+func (r Range) IsValid() bool {
+	return r.Start.IsValid() && r.End.IsValid() && (r.Start.Line < r.End.Line || (r.Start.Line == r.End.Line && r.Start.Column <= r.End.Column))
+}
+
+// converts a byte offset to a line/column position
+func PositionFromOffset(content string, offset int) Position {
+	if offset >= len(content) {
+		offset = len(content) - 1
 	}
 
-	end := r1.End
-	if r2.End.Line > r1.End.Line || (r2.End.Line == r1.End.Line && r2.End.Character > r1.End.Character) {
-		end = r2.End
+	line := 1
+	column := 1
+
+	for i := 0; i < offset && i < len(content); i++ {
+		if content[i] == '\n' {
+			line++
+			column = 1
+		} else {
+			column++
+		}
 	}
 
-	return Range{Start: start, End: end}
+	return Position{Line: line, Column: column}
+}
+
+// converts a line/column position to a byte offset
+func OffsetFromPosition(content string, pos Position) int {
+	currentLine := 1
+	currentColumn := 1
+
+	for i := range content {
+		if currentLine == pos.Line && currentColumn == pos.Column {
+			return i
+		}
+
+		if content[i] == '\n' {
+			currentLine++
+			currentColumn = 1
+		} else {
+			currentColumn++
+		}
+	}
+
+	return len(content)
 }

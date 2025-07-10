@@ -6,287 +6,260 @@ import (
 
 	"github.com/goccy/go-yaml/ast"
 	"github.com/goccy/go-yaml/parser"
-	yamltoken "github.com/goccy/go-yaml/token"
+
+	"github.com/tliron/commonlog"
 )
 
-// Node represents a YAML AST node with position information
-type Node struct {
-	Value    any
-	Children map[string]*Node
-	Range    Range
-	Parent   *Node
-	ASTNode  ast.Node // Keep reference to original AST node
+type YamlParser struct {
+	logger commonlog.Logger
 }
 
-// DocumentModel represents the YAML document structure
-type DocumentModel struct {
-	RootMap  map[string]*Node
-	RootNode *Node
+type ParsedYAML struct {
+	Root     ast.Node
+	Content  string
+	FilePath string
 }
 
-// YAMLParser handles the parsing operation
-type YAMLParser struct {
-	content string
+func NewYAMLParser(logger commonlog.Logger) *YamlParser {
+	return &YamlParser{
+		logger: logger,
+	}
 }
 
-// NewYAMLParser creates a new YAML parser instance
-func NewYAMLParser() *YAMLParser {
-	return &YAMLParser{}
-}
+// parses YAML content and returns AST with position information
+func (p *YamlParser) Parse(content, filePath string) (*ParsedYAML, error) {
+	p.logger.Debugf("Parsing YAML file: %s", filePath)
 
-// Parse parses YAML content and returns a document model with position information
-func (p *YAMLParser) Parse(content string) (*DocumentModel, error) {
-	p.content = content
-
-	// Parse the YAML into an AST
-	file, err := parser.ParseBytes([]byte(content), 0)
+	file, err := parser.ParseBytes([]byte(content), parser.ParseComments)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse YAML: %w", err)
 	}
 
-	// Convert the AST to our document model
-	model := &DocumentModel{
-		RootMap: make(map[string]*Node),
+	if len(file.Docs) == 0 {
+		return &ParsedYAML{
+			Root:     nil,
+			Content:  content,
+			FilePath: filePath,
+		}, nil
 	}
 
-	// Process each document in the file
-	for _, doc := range file.Docs {
-		if doc.Body != nil {
-			model.RootNode = p.processNode(doc.Body, nil)
+	root := file.Docs[0].Body
 
-			// If the root is a mapping, populate RootMap
-			if mappingNode, ok := doc.Body.(*ast.MappingNode); ok {
-				for _, value := range mappingNode.Values {
-					if keyNode, ok := value.Key.(*ast.StringNode); ok {
-						model.RootMap[keyNode.Value] = p.processNode(value.Value, model.RootNode)
-					}
+	return &ParsedYAML{
+		Root:     root,
+		Content:  content,
+		FilePath: filePath,
+	}, nil
+}
+
+// === AST Utility Functions ===
+
+// finds a node by key in a mapping node
+func FindNodeByKey(node ast.Node, key string) ast.Node {
+	if node == nil {
+		return nil
+	}
+
+	mapping, ok := node.(*ast.MappingNode)
+	if !ok {
+		return nil
+	}
+
+	for _, value := range mapping.Values {
+		if value.Key != nil {
+			keyString := strings.TrimSpace(value.Key.String())
+			keyString = strings.Trim(keyString, `"'`)
+			if keyString == key {
+				return value.Value
+			}
+		}
+	}
+
+	return nil
+}
+
+// gets the range from a node with proper start and end positions
+func GetNodeRange(node ast.Node, content string) Range {
+	if node == nil {
+		return Range{
+			Start: Position{Line: 1, Column: 1},
+			End:   Position{Line: 1, Column: 1},
+		}
+	}
+
+	token := node.GetToken()
+	if token == nil {
+		return Range{
+			Start: Position{Line: 1, Column: 1},
+			End:   Position{Line: 1, Column: 1},
+		}
+	}
+
+	start := Position{
+		Line:   token.Position.Line,
+		Column: token.Position.Column,
+	}
+
+	// Calculate end position based on node content
+	nodeText := strings.TrimSpace(node.String())
+	end := calculateEndPosition(start, nodeText)
+
+	return Range{
+		Start: start,
+		End:   end,
+	}
+}
+
+// gets a value at a specific YAML path (e.g., "metadata.name")
+func GetValueAtPath(node ast.Node, path string) ast.Node {
+	if node == nil {
+		return nil
+	}
+
+	parts := strings.Split(path, ".")
+	current := node
+
+	for _, part := range parts {
+		current = FindNodeByKey(current, part)
+		if current == nil {
+			return nil
+		}
+	}
+
+	return current
+}
+
+// gets a precise position for a field at a given path
+func GetPrecisePosition(node ast.Node, path string, content string) Range {
+	if node == nil {
+		return Range{
+			Start: Position{Line: 1, Column: 1},
+			End:   Position{Line: 1, Column: 1},
+		}
+	}
+
+	if path == "" {
+		return GetNodeRange(node, content)
+	}
+
+	// Navigate to the specific path
+	targetNode := GetValueAtPath(node, path)
+	if targetNode != nil {
+		return GetNodeRange(targetNode, content)
+	}
+
+	// If path not found, calculate where it should be
+	return calculatePositionForMissingField(node, path, content)
+}
+
+// calculates where a missing field should be positioned
+func calculatePositionForMissingField(node ast.Node, path string, content string) Range {
+	parts := strings.Split(path, ".")
+	if len(parts) == 0 {
+		return Range{
+			Start: Position{Line: 1, Column: 1},
+			End:   Position{Line: 1, Column: 1},
+		}
+	}
+
+	// Find the deepest existing parent
+	current := node
+	var lastExisting ast.Node
+	existingPath := ""
+
+	for _, part := range parts {
+		next := FindNodeByKey(current, part)
+		if next == nil {
+			// This is where the missing field should be
+			if lastExisting != nil {
+				// Position after the last existing field
+				lastRange := GetNodeRange(lastExisting, content)
+				return Range{
+					Start: Position{Line: lastRange.End.Line, Column: lastRange.End.Column},
+					End:   Position{Line: lastRange.End.Line, Column: lastRange.End.Column + len(part) + 1},
 				}
 			}
+			break
 		}
-	}
-
-	return model, nil
-}
-
-// processNode builds our structured model from AST nodes
-func (p *YAMLParser) processNode(astNode ast.Node, parent *Node) *Node {
-	node := &Node{
-		Children: make(map[string]*Node),
-		Range:    p.rangeFromNode(astNode),
-		Parent:   parent,
-		ASTNode:  astNode,
-	}
-
-	switch n := astNode.(type) {
-	case *ast.MappingNode:
-		// Process mapping (object) nodes
-		mapValue := make(map[string]interface{})
-		for _, value := range n.Values {
-			if keyNode := p.getStringValue(value.Key); keyNode != "" {
-				childNode := p.processNode(value.Value, node)
-				node.Children[keyNode] = childNode
-				mapValue[keyNode] = childNode.Value
-			}
-		}
-		node.Value = mapValue
-
-	case *ast.SequenceNode:
-		// Process sequence (array) nodes
-		var seqValue []interface{}
-		for i, value := range n.Values {
-			childNode := p.processNode(value, node)
-			// Store array items with index as key
-			node.Children[fmt.Sprintf("[%d]", i)] = childNode
-			seqValue = append(seqValue, childNode.Value)
-		}
-		node.Value = seqValue
-
-	case *ast.StringNode:
-		node.Value = n.Value
-
-	case *ast.IntegerNode:
-		node.Value = n.Value
-
-	case *ast.FloatNode:
-		node.Value = n.Value
-
-	case *ast.BoolNode:
-		node.Value = n.Value
-
-	case *ast.NullNode:
-		node.Value = nil
-
-	case *ast.LiteralNode:
-		node.Value = n.Value.Value
-
-	case *ast.AnchorNode:
-		// Handle anchor references
-		if n.Name != nil {
-			node.Value = p.processNode(n.Name, node).Value
-		}
-
-	case *ast.AliasNode:
-		// Handle alias references
-		if n.Value != nil {
-			node.Value = p.processNode(n.Value, node).Value
-		}
-	}
-
-	return node
-}
-
-// rangeFromNode extracts range information from an AST node
-func (p *YAMLParser) rangeFromNode(node ast.Node) Range {
-	tok := node.GetToken()
-	if tok == nil {
-		return Range{}
-	}
-
-	startPos := p.positionFromToken(tok.Position)
-
-	// Calculate end position based on node type and content
-	endPos := startPos
-
-	switch n := node.(type) {
-	case *ast.MappingNode:
-		// For mappings, find the last value's end position
-		if len(n.Values) > 0 {
-			lastValue := n.Values[len(n.Values)-1]
-			endPos = p.rangeFromNode(lastValue.Value).End
-		}
-
-	case *ast.SequenceNode:
-		// For sequences, find the last item's end position
-		if len(n.Values) > 0 {
-			lastValue := n.Values[len(n.Values)-1]
-			endPos = p.rangeFromNode(lastValue).End
-		}
-
-	default:
-		// For scalar values, calculate based on content length
-		valueStr := p.getNodeString(node)
-		lines := strings.Split(valueStr, "\n")
-		if len(lines) > 1 {
-			endPos.Line = startPos.Line + len(lines) - 1
-			endPos.Character = len(lines[len(lines)-1])
+		lastExisting = next
+		current = next
+		if existingPath == "" {
+			existingPath = part
 		} else {
-			endPos.Character = startPos.Character + len(valueStr)
+			existingPath += "." + part
 		}
 	}
 
-	return Range{Start: startPos, End: endPos}
+	// If we have a parent, position inside it
+	if current != nil && current != node {
+		currentRange := GetNodeRange(current, content)
+		return Range{
+			Start: Position{Line: currentRange.Start.Line + 1, Column: 3}, // Indented
+			End:   Position{Line: currentRange.Start.Line + 1, Column: 3 + len(parts[len(parts)-1])},
+		}
+	}
+
+	// Default to document start
+	return Range{
+		Start: Position{Line: 1, Column: 1},
+		End:   Position{Line: 1, Column: 1},
+	}
 }
 
-// positionFromToken converts a YAML token position to our Position type
-func (p *YAMLParser) positionFromToken(pos *yamltoken.Position) Position {
-	if pos == nil {
-		return Position{}
+// returns the type of a node value for validation
+func GetNodeType(node ast.Node) string {
+	if node == nil {
+		return "unknown"
 	}
-	return Position{
-		Line:      pos.Line - 1, // Convert to 0-based
-		Character: pos.Column - 1,
-	}
-}
 
-// getStringValue extracts string value from a node
-func (p *YAMLParser) getStringValue(node ast.Node) string {
 	switch n := node.(type) {
 	case *ast.StringNode:
-		return n.Value
-	case *ast.LiteralNode:
-		return n.Value.Value
-	default:
-		return ""
-	}
-}
-
-// getNodeString gets the string representation of a node
-func (p *YAMLParser) getNodeString(node ast.Node) string {
-	switch n := node.(type) {
-	case *ast.StringNode:
-		return n.Value
+		return "string"
 	case *ast.IntegerNode:
-		return fmt.Sprintf("%d", n.Value)
+		return "integer"
 	case *ast.FloatNode:
-		return fmt.Sprintf("%f", n.Value)
+		return "number"
 	case *ast.BoolNode:
-		return fmt.Sprintf("%t", n.Value)
-	case *ast.LiteralNode:
-		return n.Value.Value
+		return "boolean"
+	case *ast.MappingNode:
+		return "object"
+	case *ast.SequenceNode:
+		return "array"
+	case *ast.NullNode:
+		return "null"
 	default:
-		return ""
+		// For other types, try to infer from string representation
+		str := strings.TrimSpace(n.String())
+		if str == "true" || str == "false" {
+			return "boolean"
+		}
+		if strings.HasPrefix(str, "[") && strings.HasSuffix(str, "]") {
+			return "array"
+		}
+		if strings.HasPrefix(str, "{") && strings.HasSuffix(str, "}") {
+			return "object"
+		}
+		return "string"
 	}
 }
 
-// FindNodeAtPosition finds the most specific node at a given position
-func (model *DocumentModel) FindNodeAtPosition(pos Position) *Node {
-	if model.RootNode == nil {
-		return nil
-	}
-	return findNodeAtPositionRecursive(model.RootNode, pos)
-}
+// === Private helper functions ===
 
-func findNodeAtPositionRecursive(node *Node, pos Position) *Node {
-	if !IsPositionInRange(pos, node.Range) {
-		return nil
-	}
+// calculates end position from start position and text
+func calculateEndPosition(start Position, text string) Position {
+	lines := strings.Split(text, "\n")
 
-	// Check children for more specific match
-	for _, child := range node.Children {
-		if found := findNodeAtPositionRecursive(child, pos); found != nil {
-			return found
+	if len(lines) == 1 {
+		// Single line
+		return Position{
+			Line:   start.Line,
+			Column: start.Column + len(text),
 		}
 	}
 
-	// No child contains the position, so this node is the most specific
-	return node
-}
-
-// GetPath returns the path to a node from the root
-func (n *Node) GetPath() []string {
-	var path []string
-	current := n
-
-	for current != nil && current.Parent != nil {
-		// Find the key for this node in its parent
-		for key, child := range current.Parent.Children {
-			if child == current {
-				path = append([]string{key}, path...)
-				break
-			}
-		}
-		current = current.Parent
+	// Multi-line
+	return Position{
+		Line:   start.Line + len(lines) - 1,
+		Column: len(lines[len(lines)-1]) + 1,
 	}
-
-	return path
-}
-
-// IsCELExpression checks if a node contains a CEL expression
-func IsCELExpression(node *Node) bool {
-	if str, ok := node.Value.(string); ok {
-		// Simple heuristic: check for ${} pattern
-		return strings.Contains(str, "${") && strings.Contains(str, "}")
-	}
-	return false
-}
-
-// ExtractCELExpression extracts the CEL expression from a string value
-func ExtractCELExpression(value string) (string, bool) {
-	start := strings.Index(value, "${")
-	if start == -1 {
-		return "", false
-	}
-
-	end := strings.Index(value[start:], "}")
-	if end == -1 {
-		return "", false
-	}
-
-	return value[start+2 : start+end], true
-}
-
-// ParseYAMLContent is a helper function to parse YAML content for testing
-func ParseYAMLContent(content string) (*DocumentModel, error) {
-	parser := NewYAMLParser()
-	return parser.Parse(content)
 }
