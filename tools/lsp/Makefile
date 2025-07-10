@@ -1,8 +1,7 @@
 SERVER_BINARY_NAME = kro-lsp
-SERVER_PACKAGE_PATH = ./tools/lsp/server
+SERVER_PACKAGE_PATH = ./server
 CLIENT_DIR = client
 SERVER_DIR = server
-ROOT_DIR = ../..
 
 ## build: build both server and client
 .PHONY: build
@@ -12,7 +11,7 @@ build: build/server build/client
 .PHONY: build/server
 build/server:
 	@echo "Building language server with debug symbols..."
-	cd $(ROOT_DIR) && go build -o tools/lsp/server/$(SERVER_BINARY_NAME) $(SERVER_PACKAGE_PATH)
+	go build -o $(SERVER_DIR)/$(SERVER_BINARY_NAME) $(SERVER_PACKAGE_PATH)
 
 ## build/client: build the VS Code extension
 .PHONY: build/client
@@ -36,7 +35,7 @@ clean: clean/server clean/client
 clean/server:
 	@echo "Cleaning server build artifacts and dependencies..."
 	rm -f $(SERVER_DIR)/$(SERVER_BINARY_NAME)
-	cd $(ROOT_DIR) && go clean -modcache
+	go clean -modcache
 
 ## clean/client: clean client build artifacts and dependencies
 .PHONY: clean/client
