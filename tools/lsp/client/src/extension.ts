@@ -101,10 +101,7 @@ export function activate(context: vscode.ExtensionContext) {
   // Client options - configure which files the language server should handle
   const clientOptions: LanguageClientOptions = {
     // Register the server for YAML documents that might be Kro files
-    documentSelector: [
-      { scheme: "file", language: "yaml" },
-      { scheme: "file", language: "kro-yaml" },
-    ],
+    documentSelector: [{ scheme: "file", language: "yaml" }],
     synchronize: {
       // Notify the server about file changes to YAML files
       fileEvents: vscode.workspace.createFileSystemWatcher("**/*.{yaml,yml}"),

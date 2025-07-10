@@ -1,10 +1,10 @@
 {
-  "name": "kro-language-server",
-  "displayName": "Kro Language Server",
-  "description": "Language Server for Kro YAML files",
-  "version": "0.1.0",
+  "name": "kro-language-extension",
+  "displayName": "Kro Language Extension",
+  "description": "Language support for Kro YAML files",
+  "version": "0.0.1",
   "engines": {
-    "vscode": "^1.74.0"
+    "vscode": "^1.75.0"
   },
   "categories": [
     "Programming Languages"
@@ -16,23 +16,29 @@
   "contributes": {
     "languages": [
       {
-        "id": "kro-yaml",
+        "id": "yaml",
         "aliases": [
-          "Kro YAML",
-          "kro-yaml"
+          "YAML",
+          "Kro YAML"
         ],
         "extensions": [
           ".yaml",
           ".yml"
+        ],
+        "filenames": [
+          "Krofile"
         ],
         "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
       {
-        "language": "kro-yaml",
-        "scopeName": "source.yaml",
-        "path": "./syntaxes/yaml.tmLanguage.json"
+        "language": "yaml",
+        "scopeName": "source.yaml.kro",
+        "path": "./syntaxes/kro.tmLanguage.json",
+        "embeddedLanguages": {
+          "meta.embedded.block.kubernetes": "yaml"
+        }
       }
     ],
     "configuration": {
