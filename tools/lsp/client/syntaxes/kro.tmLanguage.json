@@ -1,0 +1,90 @@
+{
+  "scopeName": "source.kro-yaml",
+  "name": "Kro YAML",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#markers" },
+    { "include": "#cel-expressions" },
+    { "include": "#basic-types" },
+    { "include": "#keys" },
+    { "include": "#values" }
+  ],
+  "repository": {
+    "comments": {
+      "name": "comment.line.number-sign.kro-yaml",
+      "match": "#.*$"
+    },
+    "cel-expressions": {
+      "name": "variable.other.cel.kro-yaml",
+      "begin": "\\$\\{",
+      "end": "\\}",
+      "contentName": "variable.other.cel.kro-yaml",
+      "patterns": [
+        {
+          "match": "[^}]+",
+          "name": "variable.other.cel.kro-yaml"
+        }
+      ]
+    },
+    "markers": {
+      "patterns": [
+        {
+          "comment": "Capture the pipe as a separator, color only the marker (name, '=' and value); supports quoted/arrays/JSON-like values",
+          "begin": "(|)s*(?=(?:required|default|minimum|maximum|description|enum)=)",
+          "beginCaptures": {
+            "1": { "name": "punctuation.separator.kro-yaml" }
+          },
+          "end": "(?=||$)",
+          "contentName": "keyword.other.marker.kro-yaml"
+        }
+      ]
+    },
+    "basic-types": {
+      "patterns": [
+        {
+          "comment": "Map types (only group 2 gets the type scope; group 1 is the surrounding quote)",
+          "match": "(['\"])?(map\\[(?:string|integer|boolean|float|int|\\w+)\\](?:string|integer|boolean|float|int|\\w+))(?=['\"\\s\\|,]|$)",
+          "captures": {
+            "1": { "name": "punctuation.definition.string.kro-yaml" },
+            "2": { "name": "support.type.basic.kro-yaml" }
+          }
+        },
+        {
+          "comment": "Array types (['\"])? is optional quote; array token in group 2)",
+          "match": "(['\"])?(\\[\\](?:string|integer|boolean|float|int|\\w+))(?=['\"\\s\\|,]|$)",
+          "captures": {
+            "1": { "name": "punctuation.definition.string.kro-yaml" },
+            "2": { "name": "support.type.basic.kro-yaml" }
+          }
+        },
+        {
+          "comment": "Simple types (string|int|etc) — only the type is scoped",
+          "match": "(['\"])?(string|integer|boolean|float|int|array|object)(?=['\"\\s\\|,]|$)",
+          "captures": {
+            "1": { "name": "punctuation.definition.string.kro-yaml" },
+            "2": { "name": "support.type.basic.kro-yaml" }
+          }
+        }
+      ]
+    },
+
+    "keys": {
+      "name": "entity.name.tag.kro-yaml",
+      "match": "^[ \\t]*([A-Za-z0-9._/-]+):"
+    },
+    "values": {
+      "name": "string.unquoted.kro-yaml",
+      "begin": "(?<=:)\\s*",
+      "end": "$|(?=#)",
+      "patterns": [
+        { "include": "#markers" },
+        { "include": "#cel-expressions" },
+        { "include": "#basic-types" },
+        {
+          "match": "[^\\n#|]+",
+          "name": "string.unquoted.kro-yaml"
+        }
+      ]
+    }
+  }
+}

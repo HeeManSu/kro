@@ -10,7 +10,9 @@
     "Programming Languages"
   ],
   "activationEvents": [
-    "onLanguage:kro-yaml"
+    "onLanguage:kro-yaml",
+    "workspaceContains:**/*.yaml",
+    "workspaceContains:**/*.yml"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -28,9 +30,72 @@
         "filenames": [
           "Krofile"
         ],
-        "configuration": "./language-configuration.json"
+        "configuration": "./language-configuration.json",
+        "priority": 1
       }
     ],
+    "grammars": [
+      {
+        "language": "kro-yaml",
+        "scopeName": "source.kro-yaml",
+        "path": "./syntaxes/kro.tmLanguage.json",
+        "injectTo": [
+          "source.yaml"
+        ],
+        "embeddedLanguages": {
+          "source.kro-yaml": "yaml"
+        }
+      }
+    ],
+    "configurationDefaults": {
+      "[kro-yaml]": {
+        "editor.tokenColorCustomizations": {
+          "textMateRules": [
+            {
+              "scope": "entity.name.tag.kro-yaml",
+              "settings": {
+                "foreground": "#61AFEF"
+              }
+            },
+            {
+              "scope": "variable.other.cel.kro-yaml",
+              "settings": {
+                "foreground": "#FF2629"
+              }
+            },
+            {
+              "scope": "string.unquoted.kro-yaml",
+              "settings": {
+                "foreground": "#E06C75"
+              }
+            },
+            {
+              "scope": "comment.line.number-sign.kro-yaml",
+              "settings": {
+                "foreground": "#7F848E"
+              }
+            },
+            {
+              "scope": "keyword.other.marker.kro-yaml",
+              "settings": {
+                "foreground": "#E5C07B"
+              }
+            },
+            {
+              "scope": "keyword.other.marker.value.kro-yaml",
+              "settings": {
+                "foreground": "#E5C07B"
+              }
+            }
+          ]
+        },
+        "editor.defaultFormatter": "kro-language-extension",
+        "files.associations": {
+          "*.yaml": "kro-yaml",
+          "*.yml": "kro-yaml"
+        }
+      }
+    },
     "configuration": {
       "type": "object",
       "title": "Kro Language Server",
@@ -66,5 +131,14 @@
   },
   "dependencies": {
     "vscode-languageclient": "^8.1.0"
-  }
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true,
+      "description": "KRO YAML extension can be enabled in untrusted workspaces"
+    }
+  },
+  "extensionKind": [
+    "workspace"
+  ]
 }
