@@ -1,0 +1,26 @@
+{
+  "name": "Kro Dark Theme",
+  "type": "dark",
+  "semanticHighlighting": true,
+  "semanticTokenColors": {
+    "property": "#61AFEF",
+    "values": "#E06C75",
+    "types": "#98C379",
+    "markers": "#E5C07B",
+    "function": "#C678DD",
+    "comment": "#7F848E"
+  },
+  "colors": {
+    "editor.background": "#1E1E1E",
+    "editor.foreground": "#D4D4D4"
+  },
+  "tokenColors": [
+    {
+      "name": "Comments",
+      "scope": "comment",
+      "settings": {
+        "foreground": "#7F848E"
+      }
+    }
+  ]
+}
