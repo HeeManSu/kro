@@ -2,29 +2,23 @@
   "scopeName": "source.kro-yaml",
   "name": "Kro YAML",
   "patterns": [
-    { "include": "#comments" },
-    { "include": "#markers" },
     { "include": "#cel-expressions" },
+    { "include": "#markers" },
     { "include": "#basic-types" },
+    { "include": "#comments" },
     { "include": "#keys" },
-    { "include": "#values" }
+    { "include": "#values" },
+    { "include": "source.yaml" }
   ],
+  "injectionSelector": "L:source.yaml",
   "repository": {
     "comments": {
       "name": "comment.line.number-sign.kro-yaml",
       "match": "#.*$"
     },
     "cel-expressions": {
-      "name": "variable.other.cel.kro-yaml",
-      "begin": "\\$\\{",
-      "end": "\\}",
-      "contentName": "variable.other.cel.kro-yaml",
-      "patterns": [
-        {
-          "match": "[^}]+",
-          "name": "variable.other.cel.kro-yaml"
-        }
-      ]
+      "match": "\\$\\{[^}]*\\}",
+      "name": "variable.other.cel.expression.kro-yaml"
     },
     "markers": {
       "patterns": [

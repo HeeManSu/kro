@@ -9,11 +9,7 @@
   "categories": [
     "Programming Languages"
   ],
-  "activationEvents": [
-    "onLanguage:kro-yaml",
-    "workspaceContains:**/*.yaml",
-    "workspaceContains:**/*.yml"
-  ],
+  "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
     "languages": [
@@ -21,7 +17,8 @@
         "id": "kro-yaml",
         "aliases": [
           "Kro YAML",
-          "Kro"
+          "Kro",
+          "ResourceGraphDefinition"
         ],
         "extensions": [
           ".yaml",
@@ -30,8 +27,16 @@
         "filenames": [
           "Krofile"
         ],
-        "configuration": "./language-configuration.json",
-        "priority": 1
+        "filenamePatterns": [
+          "**/examples/**/*.yaml",
+          "**/examples/**/*.yml",
+          "**/*rgd*.yaml",
+          "**/*rgd*.yml",
+          "**/*kro*.yaml",
+          "**/*kro*.yml"
+        ],
+        "firstLine": "^(apiVersion:\\s*(kro\\.run/v1alpha1|v1alpha1).*|kind:\\s*ResourceGraphDefinition)",
+        "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
@@ -41,80 +46,57 @@
         "path": "./syntaxes/kro.tmLanguage.json",
         "injectTo": [
           "source.yaml"
-        ],
-        "embeddedLanguages": {
-          "source.kro-yaml": "yaml"
-        }
+        ]
       }
     ],
     "configurationDefaults": {
-      "[kro-yaml]": {
-        "editor.tokenColorCustomizations": {
-          "textMateRules": [
-            {
-              "scope": "entity.name.tag.kro-yaml",
-              "settings": {
-                "foreground": "#61AFEF"
-              }
-            },
-            {
-              "scope": "variable.other.cel.kro-yaml",
-              "settings": {
-                "foreground": "#FF2629"
-              }
-            },
-            {
-              "scope": "string.unquoted.kro-yaml",
-              "settings": {
-                "foreground": "#E06C75"
-              }
-            },
-            {
-              "scope": "comment.line.number-sign.kro-yaml",
-              "settings": {
-                "foreground": "#7F848E"
-              }
-            },
-            {
-              "scope": "keyword.other.marker.kro-yaml",
-              "settings": {
-                "foreground": "#E5C07B"
-              }
-            },
-            {
-              "scope": "keyword.other.marker.value.kro-yaml",
-              "settings": {
-                "foreground": "#E5C07B"
-              }
+      "editor.tokenColorCustomizations": {
+        "textMateRules": [
+          {
+            "scope": "entity.name.tag.kro-yaml",
+            "settings": {
+              "foreground": "#569CD6"
             }
-          ]
-        },
-        "editor.defaultFormatter": "kro-language-extension",
+          },
+          {
+            "scope": "variable.other.cel.expression.kro-yaml",
+            "settings": {
+              "foreground": "#C586C0"
+            }
+          },
+          {
+            "scope": "support.type.basic.kro-yaml",
+            "settings": {
+              "foreground": "#4EC9B0"
+            }
+          },
+          {
+            "scope": "keyword.other.marker.kro-yaml",
+            "settings": {
+              "foreground": "#CE9178"
+            }
+          },
+          {
+            "scope": "punctuation.separator.kro-yaml",
+            "settings": {
+              "foreground": "#CE9178"
+            }
+          },
+          {
+            "scope": "comment.line.number-sign.kro-yaml",
+            "settings": {
+              "foreground": "#6A9955"
+            }
+          }
+        ]
+      },
+      "[kro-yaml]": {
+        "editor.defaultFormatter": "kro-language-extension"
+      },
+      "[yaml]": {
         "files.associations": {
           "*.yaml": "kro-yaml",
           "*.yml": "kro-yaml"
-        }
-      }
-    },
-    "configuration": {
-      "type": "object",
-      "title": "Kro Language Server",
-      "properties": {
-        "kroLanguageServer.serverPath": {
-          "type": "string",
-          "default": "",
-          "description": "Path to the Kro language server binary"
-        },
-        "kroLanguageServer.trace.server": {
-          "scope": "window",
-          "type": "string",
-          "enum": [
-            "off",
-            "messages",
-            "verbose"
-          ],
-          "default": "off",
-          "description": "Traces the communication between VS Code and the language server."
         }
       }
     }
