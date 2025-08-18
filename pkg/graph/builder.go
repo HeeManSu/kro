@@ -143,17 +143,23 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 
 	// we'll also store the resources in a map for easy access later.
 	resources := make(map[string]*Resource)
+	aggregatedErrors := []error{}
 	for i, rgResource := range rgd.Spec.Resources {
 		id := rgResource.ID
 		order := i
 		r, err := b.buildRGResource(rgResource, namespacedResources, order)
 		if err != nil {
-			return nil, fmt.Errorf("failed to build resource %q: %w", id, err)
+			aggregatedErrors = append(aggregatedErrors, fmt.Errorf("resource %q: %w", id, err))
+			continue
 		}
 		if resources[id] != nil {
-			return nil, fmt.Errorf("found resources with duplicate id %q", id)
+			aggregatedErrors = append(aggregatedErrors, fmt.Errorf("found resources with duplicate id %q", id))
+			continue
 		}
 		resources[id] = r
+	}
+	if len(aggregatedErrors) > 0 {
+		return nil, &MultiError{Errors: aggregatedErrors}
 	}
 
 	// At this stage we have a superficial understanding of the resources that are
@@ -214,8 +220,12 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	// and evaluate the CEL expressions in the context of the resource graph definition.
 	//This is done
 	// by dry-running the CEL expressions against the emulated resources.
+
 	err = validateResourceCELExpressions(resources, instance)
 	if err != nil {
+		if _, ok := err.(*MultiError); ok {
+			return nil, err
+		}
 		return nil, fmt.Errorf("failed to validate resource CEL expressions: %w", err)
 	}
 
@@ -233,6 +243,9 @@ func (b *Builder) NewResourceGraphDefinition(originalCR *v1alpha1.ResourceGraphD
 	// inspector.
 	dag, err := b.buildDependencyGraph(resources)
 	if err != nil {
+		if _, ok := err.(*MultiError); ok {
+			return nil, err
+		}
 		return nil, fmt.Errorf("failed to build dependency graph: %w", err)
 	}
 
@@ -410,6 +423,7 @@ func (b *Builder) buildDependencyGraph(
 		}
 	}
 
+	agg := []error{}
 	for _, resource := range resources {
 		for _, resourceVariable := range resource.variables {
 			for _, expression := range resourceVariable.Expressions {
@@ -417,19 +431,19 @@ func (b *Builder) buildDependencyGraph(
 				// resources defined in the resource graph definition.
 				err := validateCELExpressionContext(env, expression, resourceNames)
 				if err != nil {
-					return nil, fmt.Errorf("failed to validate expression context: %w", err)
+					agg = append(agg, fmt.Errorf("resource %s: invalid expression context: %w", resource.id, err))
+					continue
 				}
 
 				// We need to extract the dependencies from the expression.
 				resourceDependencies, isStatic, err := extractDependencies(env, expression, resourceNames)
 				if err != nil {
-					return nil, fmt.Errorf("failed to extract dependencies: %w", err)
+					agg = append(agg, fmt.Errorf("resource %s: dependency extraction failed: %w", resource.id, err))
+					continue
 				}
 
 				// Static until proven dynamic.
-				//
-				// This reads as: If the expression is dynamic and the resource variable is
-				// static, then we need to mark the resource variable as dynamic.
+				// If the expression is dynamic and the resource variable is static, mark it dynamic.
 				if !isStatic && resourceVariable.Kind == variable.ResourceVariableKindStatic {
 					resourceVariable.Kind = variable.ResourceVariableKindDynamic
 				}
@@ -438,10 +452,14 @@ func (b *Builder) buildDependencyGraph(
 				resourceVariable.AddDependencies(resourceDependencies...)
 				// We need to add the dependencies to the graph.
 				if err := directedAcyclicGraph.AddDependencies(resource.id, resourceDependencies); err != nil {
-					return nil, err
+					agg = append(agg, fmt.Errorf("resource %s: failed to add dependencies: %w", resource.id, err))
+					continue
 				}
 			}
 		}
+	}
+	if len(agg) > 0 {
+		return nil, &MultiError{Errors: agg}
 	}
 
 	return directedAcyclicGraph, nil
@@ -769,29 +787,51 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 		expressionContext[resourceName] = contextResource
 	}
 
+	agg := []error{}
 	for _, resource := range resources {
 		// exclude resource from the context
 		delete(expressionContext, resource.id)
 
 		err := ensureResourceExpressions(env, expressionContext, resource)
 		if err != nil {
-			return fmt.Errorf("failed to ensure resource %s expressions: %w", resource.id, err)
+			if me, ok := err.(*MultiError); ok && me != nil {
+				for _, e := range me.Errors {
+					agg = append(agg, fmt.Errorf("resource %s expressions: %v", resource.id, e))
+				}
+			} else {
+				agg = append(agg, fmt.Errorf("resource %s expressions: %w", resource.id, err))
+			}
 		}
 
 		err = ensureReadyWhenExpressions(resource)
 		if err != nil {
-			return fmt.Errorf("failed to ensure resource %s readyWhen expressions: %w", resource.id, err)
+			if me, ok := err.(*MultiError); ok && me != nil {
+				for _, e := range me.Errors {
+					agg = append(agg, fmt.Errorf("resource %s readyWhen: %v", resource.id, e))
+				}
+			} else {
+				agg = append(agg, fmt.Errorf("resource %s readyWhen: %w", resource.id, err))
+			}
 		}
 
 		err = ensureIncludeWhenExpressions(env, includeWhenContext, resource)
 		if err != nil {
-			return fmt.Errorf("failed to ensure resource %s includeWhen expressions: %w", resource.id, err)
+			if me, ok := err.(*MultiError); ok && me != nil {
+				for _, e := range me.Errors {
+					agg = append(agg, fmt.Errorf("resource %s includeWhen: %v", resource.id, e))
+				}
+			} else {
+				agg = append(agg, fmt.Errorf("resource %s includeWhen: %w", resource.id, err))
+			}
 		}
 
 		// include the resource back to the context
 		expressionContext[resource.id] = resource
 	}
 
+	if len(agg) > 0 {
+		return &MultiError{Errors: agg}
+	}
 	return nil
 }
 
@@ -799,13 +839,17 @@ func validateResourceCELExpressions(resources map[string]*Resource, instance *Re
 // against the resources defined in the resource graph definition.
 func ensureResourceExpressions(env *cel.Env, context map[string]*Resource, resource *Resource) error {
 	// We need to validate the CEL expressions in the resource.
+	agg := []error{}
 	for _, resourceVariable := range resource.variables {
 		for _, expression := range resourceVariable.Expressions {
 			_, err := ensureExpression(env, expression, []string{resource.id}, context)
 			if err != nil {
-				return fmt.Errorf("failed to dry-run expression %s: %w", expression, err)
+				agg = append(agg, fmt.Errorf("failed to dry-run expression %s: %w", expression, err))
 			}
 		}
+	}
+	if len(agg) > 0 {
+		return &MultiError{Errors: agg}
 	}
 	return nil
 }
@@ -814,11 +858,11 @@ func ensureResourceExpressions(env *cel.Env, context map[string]*Resource, resou
 // against the resources defined in the resource graph definition.
 func ensureReadyWhenExpressions(resource *Resource) error {
 	env, err := krocel.DefaultEnvironment(krocel.WithResourceIDs([]string{resource.id}))
+	if err != nil {
+		return fmt.Errorf("failed to create CEL environment: %w", err)
+	}
+	agg := []error{}
 	for _, expression := range resource.readyWhenExpressions {
-		if err != nil {
-			return fmt.Errorf("failed to create CEL environment: %w", err)
-		}
-
 		resourceEmulatedCopy := resource.emulatedObject.DeepCopy()
 		if resourceEmulatedCopy != nil && resourceEmulatedCopy.Object != nil {
 			// ignore apiVersion and kind from readyWhenExpression context
@@ -832,11 +876,15 @@ func ensureReadyWhenExpressions(resource *Resource) error {
 
 		output, err := ensureExpression(env, expression, []string{resource.id}, context)
 		if err != nil {
-			return fmt.Errorf("failed to dry-run expression %s: %w", expression, err)
+			agg = append(agg, fmt.Errorf("failed to dry-run expression %s: %w", expression, err))
+			continue
 		}
 		if !krocel.IsBoolType(output) {
-			return fmt.Errorf("output of readyWhen expression %s can only be of type bool", expression)
+			agg = append(agg, fmt.Errorf("output of readyWhen expression %s can only be of type bool", expression))
 		}
+	}
+	if len(agg) > 0 {
+		return &MultiError{Errors: agg}
 	}
 	return nil
 }
@@ -844,14 +892,19 @@ func ensureReadyWhenExpressions(resource *Resource) error {
 // ensureIncludeWhenExpressions validates the includeWhen expressions in the resource
 func ensureIncludeWhenExpressions(env *cel.Env, context map[string]*Resource, resource *Resource) error {
 	// We need to validate the CEL expressions in the resource.
+	agg := []error{}
 	for _, expression := range resource.includeWhenExpressions {
 		output, err := ensureExpression(env, expression, []string{resource.id}, context)
 		if err != nil {
-			return fmt.Errorf("failed to dry-run expression %s: %w", expression, err)
+			agg = append(agg, fmt.Errorf("failed to dry-run expression %s: %w", expression, err))
+			continue
 		}
 		if !krocel.IsBoolType(output) {
-			return fmt.Errorf("output of includeWhen expression %s can only be of type bool", expression)
+			agg = append(agg, fmt.Errorf("output of includeWhen expression %s can only be of type bool", expression))
 		}
+	}
+	if len(agg) > 0 {
+		return &MultiError{Errors: agg}
 	}
 	return nil
 }
@@ -865,7 +918,8 @@ func ensureExpression(env *cel.Env, expression string, resources []string, conte
 
 	output, err := dryRunExpression(env, expression, context)
 	if err != nil {
-		return nil, fmt.Errorf("failed to dry-run expression %s: %w", expression, err)
+		// keep error message concise to avoid duplicate context when aggregated
+		return nil, fmt.Errorf("%w", err)
 	}
 
 	return output, nil
